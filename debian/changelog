@@ -1,0 +1,147 @@
+glyphslib (5.3.2+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.3.2+ds1
+  * debian/control: Update dependencies
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Mon, 01 Feb 2021 12:08:04 +0800
+
+glyphslib (5.3.1+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.3.1+ds1
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Thu, 07 Jan 2021 23:05:28 +0800
+
+glyphslib (5.3.0+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.3.0+ds1
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Wed, 16 Dec 2020 16:02:49 +0800
+
+glyphslib (5.3.0~b1+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.3.0~b1+ds1
+  * debian/control:
+    - Update dependencies
+    - Use debhelper 13
+    - Bump Standards-Version to 4.5.1;  No other change is needed
+  * debian/watch:
+    - Handle pre-release version numbering
+    - Use release page instead of tags page
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Sun, 13 Dec 2020 23:20:16 +0800
+
+glyphslib (5.2.0+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.2.0+ds1
+  * debian/control: Update dependencies
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Sat, 10 Oct 2020 23:36:50 +0800
+
+glyphslib (5.1.10+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.1.10+ds1
+  * d/control: Update dependencies
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Fri, 29 May 2020 23:19:52 +0800
+
+glyphslib (5.1.6+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.1.6+ds1
+  * d/control: Update dependencies
+  * d/patches: Remove upstreamed patches
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Mon, 02 Mar 2020 00:21:52 +0800
+
+glyphslib (5.1.2+ds1-2) unstable; urgency=medium
+
+  * New upstream version 5.1.2+ds1
+  * Bump Standards-Version to 4.5.0
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Wed, 29 Jan 2020 16:06:11 +0800
+
+glyphslib (5.1.0+ds1-1) unstable; urgency=medium
+
+  * New upstream version 5.1.0+ds1
+  * Fix lintian warning maintainer-script-lacks-debhelper-token
+  * d/patch: Patch test fixtures due to fonttools version update
+  * Change how glyphsdata package is referenced
+    - d/python3-glyphslib.links: Symlink the files instead of directory
+    - d/preinst: Add script to remove old symlinks
+  * debian/control: Update dependencies
+  * Add CI script for salsa.debian.org
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Tue, 24 Dec 2019 02:27:44 +0100
+
+glyphslib (5.0.1-1) unstable; urgency=medium
+
+  * New upstream version 5.0.1
+  * Bump Standards-Version to 4.4.1
+  * d/control: Add python3-wheel to Build-Depends
+  * d/tests/control: Add autopkgtest control file that runs pytest-3
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Tue, 08 Oct 2019 09:59:52 +0800
+
+glyphslib (4.1.2-1) unstable; urgency=medium
+
+  * New upstream version 4.1.2
+  * Bump debhelper-compat to 12
+  * Enable tests
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Sun, 08 Sep 2019 14:32:16 +0800
+
+glyphslib (4.0.0a1-1) unstable; urgency=medium
+
+  * New upstream version 4.0.0a1
+  * debian/patches:
+    - Add patch to remove xmldiff related tests
+  * debian/control:
+    - Update dependencies
+    - Bump Standards-Version to 4.4.0
+  * Change upstream URL
+  * Update dependencies
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Thu, 18 Jul 2019 10:33:53 -0300
+
+glyphslib (3.1.4-1) unstable; urgency=medium
+
+  [ Yao Wei (魏銘廷) ]
+  * New upstream version 3.1.4
+  * Remove glyphsinfo files from upstream, and symlink to glyphsinfo package
+  * debian/control:
+    - Change uploader email
+    - Update dependencies
+    - Bump Standards-Version to 4.2.1
+
+  [ Jeremy Bicha ]
+  * Drop now unused lintian overrides
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Fri, 14 Dec 2018 10:33:30 +0800
+
+glyphslib (3.0.2-3) unstable; urgency=low
+
+  * Separate executables into another package
+
+ -- Yao Wei (魏銘廷) <mwei@lxde.org>  Wed, 12 Sep 2018 06:49:14 +0800
+
+glyphslib (3.0.2-2) unstable; urgency=medium
+
+  * New upstream version 3.0.2
+  * debian/compat:
+    - Bump debhelper to 11
+  * debian/copyright:
+    - Update for OFL-1.1 licensed file
+  * debian/control:
+    - Bump debhelper to 11
+    - Update dependency versions
+    - Add dependency python3-setuptools-scm
+    - Bump Standards-Version to 4.1.5
+    - Remove deprecated X-Python3-Version
+    - Update mailing list address
+
+ -- Yao Wei (魏銘廷) <mwei@lxde.org>  Tue, 11 Sep 2018 13:15:04 +0800
+
+glyphslib (2.2.1-1) unstable; urgency=medium
+
+  * Initial release. Closes: #868005
+
+ -- Yao Wei (魏銘廷) <mwei@lxde.org>  Thu, 04 Jan 2018 21:08:15 +0800

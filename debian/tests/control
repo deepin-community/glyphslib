@@ -1,0 +1,6 @@
+Test-Command: pytest-3
+Depends: python3-all,
+         python3-glyphslib,
+         python3-pytest,
+         python3-ufonormalizer,
+         xmldiff

@@ -1,0 +1,7 @@
+#!/bin/sh -e
+
+if [ "$1" = upgrade ] && [ -h /usr/lib/python3/dist-packages/glyphsLib/data ]; then
+  rm /usr/lib/python3/dist-packages/glyphsLib/data
+fi
+
+#DEBHELPER#
