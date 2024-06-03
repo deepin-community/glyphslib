@@ -17,9 +17,10 @@
 import os
 from textwrap import dedent
 
-from glyphsLib import to_glyphs, to_ufos, classes
-from glyphsLib.builder.features import _build_gdef
+from glyphsLib import to_glyphs, to_ufos, classes, to_designspace
+from glyphsLib.builder.features import _build_public_opentype_categories
 
+from fontTools.designspaceLib import DesignSpaceDocument
 import pytest
 
 
@@ -90,13 +91,17 @@ def test_classes(tmpdir, ufo_module):
     # FIXME: (jany) no whitespace is preserved in this section
     ufo.features.text = dedent(
         """\
-        @lc = [ a b ];
+        @lc = [ a b
+        ];
 
-        @UC = [ A B ];
+        @UC = [ A B
+        ];
 
-        @all = [ @lc @UC zero one ];
+        @all = [ @lc @UC zero one
+        ];
 
-        @more = [ dot @UC colon @lc paren ];
+        @more = [ dot @UC colon @lc paren
+        ];
     """
     )
 
@@ -115,7 +120,8 @@ def test_class_synonym(tmpdir, ufo_module):
     ufo = ufo_module.Font()
     ufo.features.text = dedent(
         """\
-        @lc = [ a b ];
+        @lc = [ a b
+        ];
 
         @lower = @lc;
     """
@@ -130,9 +136,176 @@ def test_class_synonym(tmpdir, ufo_module):
     # FIXME: (jany) should roundtrip
     assert rtufo.features.text == dedent(
         """\
-        @lc = [ a b ];
+        @lc = [ a b
+        ];
 
-        @lower = [ @lc ];
+        @lower = [ @lc
+        ];
+    """
+    )
+
+
+def test_feature_names(tmpdir, ufo_module):
+    ufo = ufo_module.Font()
+    ufo.features.text = dedent(
+        """\
+        feature ss01 {
+        featureNames {
+          name "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+    font, rtufo = roundtrip(ufo, tmpdir, ufo_module)
+
+    # Check code in Glyphs font
+    gs_feature = font.features[0]
+    assert gs_feature.automatic
+    assert gs_feature.code.strip() == "sub g by g.ss01;"
+    assert gs_feature.notes.strip() == "Name: Alternate g"
+
+    assert rtufo.features.text == dedent(
+        """\
+        feature ss01 {
+        featureNames {
+          name "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+
+def test_feature_names_notes(tmpdir, ufo_module):
+    ufo = ufo_module.Font()
+    ufo.features.text = dedent(
+        """\
+        feature ss01 {
+        # notes:
+        # foo
+        featureNames {
+          name "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+    font, rtufo = roundtrip(ufo, tmpdir, ufo_module)
+
+    # Check code in Glyphs font
+    gs_feature = font.features[0]
+    assert gs_feature.automatic
+    assert gs_feature.code.strip() == "sub g by g.ss01;"
+    assert gs_feature.notes.strip() == "Name: Alternate g\nfoo"
+
+    assert rtufo.features.text == dedent(
+        """\
+        feature ss01 {
+        # notes:
+        # foo
+        featureNames {
+          name "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+
+def test_feature_names_full(tmpdir, ufo_module):
+    ufo = ufo_module.Font()
+    ufo.features.text = dedent(
+        """\
+        feature ss01 {
+        featureNames {
+          name 1 "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+    font, rtufo = roundtrip(ufo, tmpdir, ufo_module)
+
+    # Check code in Glyphs font
+    gs_feature = font.features[0]
+    assert gs_feature.automatic
+    assert gs_feature.code.strip() == "sub g by g.ss01;"
+    assert gs_feature.notes.strip() == dedent(
+        """\
+        featureNames {
+            name 1 "Alternate g";
+        };"""
+    )
+
+    assert rtufo.features.text == dedent(
+        """\
+        feature ss01 {
+        featureNames {
+            name 1 "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+
+def test_feature_names_multi(tmpdir, ufo_module):
+    ufo = ufo_module.Font()
+    ufo.features.text = dedent(
+        """\
+        feature ss01 {
+        featureNames {
+          name "Alternate g";
+          name 1 "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
+    """
+    )
+
+    font, rtufo = roundtrip(ufo, tmpdir, ufo_module)
+
+    # Check code in Glyphs font
+    gs_feature = font.features[0]
+    assert gs_feature.automatic
+    assert gs_feature.code.strip() == "sub g by g.ss01;"
+    assert gs_feature.notes.strip() == dedent(
+        """\
+        featureNames {
+            name "Alternate g";
+            name 1 "Alternate g";
+        };"""
+    )
+
+    assert rtufo.features.text == dedent(
+        """\
+        feature ss01 {
+        featureNames {
+            name "Alternate g";
+            name 1 "Alternate g";
+        };
+        # automatic
+        sub g by g.ss01;
+
+        } ss01;
     """
     )
 
@@ -169,6 +342,50 @@ def test_include_no_semicolon(tmpdir, ufo_module):
     assert font.featurePrefixes[0].code.strip() == ufo.features.text.strip()
 
     assert rtufo.features.text == ufo.features.text
+
+
+def test_to_glyphs_expand_includes(tmp_path, ufo_module):
+    ufo = ufo_module.Font()
+    ufo.features.text = dedent(
+        """\
+        include(family.fea);
+        """
+    )
+    ufo.save(str(tmp_path / "font.ufo"))
+
+    included_path = tmp_path / "family.fea"
+    included_path.write_text("# hello from family.fea")
+    assert included_path.exists()
+
+    font = to_glyphs([ufo], minimize_ufo_diffs=True, expand_includes=True)
+
+    assert len(font.featurePrefixes) == 1
+    assert font.featurePrefixes[0].code.strip() == "# hello from family.fea"
+
+
+def test_to_ufos_expand_includes(tmp_path, ufo_module):
+    font = classes.GSFont()
+    font.masters.append(classes.GSFontMaster())
+
+    feature_prefix = classes.GSFeaturePrefix()
+    feature_prefix.name = "include"
+    feature_prefix.code = dedent(
+        """\
+        include(family.fea);
+        """
+    )
+    font.featurePrefixes.append(feature_prefix)
+
+    font.filepath = str(tmp_path / "font.glyphs")
+    font.save()
+
+    included_path = tmp_path / "family.fea"
+    included_path.write_text("# hello from family.fea")
+    assert included_path.exists()
+
+    (ufo,) = to_ufos(font, ufo_module=ufo_module, expand_includes=True)
+
+    assert ufo.features.text == ("# Prefix: include\n# hello from family.fea")
 
 
 def test_standalone_lookup(tmpdir, ufo_module):
@@ -416,17 +633,6 @@ def test_roundtrip_existing_GDEF(tmpdir, ufo_with_GDEF):
     assert rtufo.features.text == gdef
 
 
-def test_generate_GDEF_already_exists(tmpdir, ufo_with_GDEF):
-    ufo, _, ufo_module = ufo_with_GDEF
-    font = to_glyphs([ufo])
-    filename = os.path.join(str(tmpdir), "font.glyphs")
-    font.save(filename)
-    font = classes.GSFont(filename)
-
-    with pytest.raises(ValueError, match="features already contain a `table GDEF"):
-        to_ufos(font, generate_GDEF=True, ufo_module=ufo_module)
-
-
 def test_groups_remain_at_top(tmpdir, ufo_module):
     ufo = ufo_module.Font()
     ufo.newGlyph("zero")
@@ -489,4 +695,80 @@ def test_build_GDEF_incomplete_glyphOrder():
         glyph = font.newGlyph(name)
         glyph.appendAnchor({"name": "top", "x": 0, "y": 0})
 
-    assert "[b c a d], # Base" in _build_gdef(font)
+    categories = _build_public_opentype_categories(font)
+    assert categories == {"a": "base", "b": "base", "c": "base", "d": "base"}
+
+
+def test_comments_in_classes(ufo_module):
+    filename = os.path.join(os.path.dirname(__file__), "../data/CommentedClass.glyphs")
+    font = classes.GSFont(filename)
+    (ufo,) = to_ufos(font)
+    assert ufo.features.text == dedent(
+        """\
+            @Test = [ A
+            # B
+            ];
+"""
+    )
+
+
+def test_mark_class_used_as_glyph_class(tmpdir, ufo_module):
+    ufo = ufo_module.Font()
+    ufo.features.text = dedent(
+        """\
+        markClass CombBreve_Macron <anchor -700 1000> @_U;
+        markClass CombGraphemeJoiner <anchor 0 0> @_U;
+        @c_u_diacs = @_U;
+        """
+    )
+
+    font = to_glyphs([ufo], minimize_ufo_diffs=True)
+
+    assert (
+        font.featurePrefixes[0].code
+        == dedent(
+            """\
+            markClass CombBreve_Macron <anchor -700 1000> @_U;
+            markClass CombGraphemeJoiner <anchor 0 0> @_U;
+            """
+        ).strip()
+    )
+    assert font.classes[0].name == "c_u_diacs"
+    assert font.classes[0].code == "@_U"
+
+    (rtufo,) = to_ufos(font, ufo_module=ufo_module)
+
+    # After roundtrip glyph classes are always placed before the mark classes
+    # hence the following assertion would fail...
+    # https://github.com/googlefonts/glyphsLib/issues/694#issuecomment-1117204523
+    # assert rtufo.features.text == ufo.features.text
+
+
+def test_automatic_added_to_manual_kern(tmpdir, ufo_module):
+    """Test that when a Glyphs file has a manual kern feature,
+    automatic markers are added so that the source kerning also
+    gets applied.
+    """
+    font = classes.GSFont()
+    font.masters.append(classes.GSFontMaster())
+
+    (ufo,) = to_ufos(font)
+
+    assert "# Automatic Code" not in ufo.features.text
+
+    kern = classes.GSFeature(name="kern", code="pos a b 100;")
+    font.features.append(kern)
+    (ufo,) = to_ufos(font)
+
+    assert "# Automatic Code" in ufo.features.text
+
+    designspace = to_designspace(font, ufo_module=ufo_module)
+    path = str(tmpdir / "test.designspace")
+    designspace.write(path)
+    for source in designspace.sources:
+        source.font.save(str(tmpdir / source.filename))
+
+    designspace2 = DesignSpaceDocument.fromfile(path)
+    font2 = to_glyphs(designspace2, ufo_module=ufo_module)
+
+    assert len([f for f in font2.features if f.name == "kern"]) == 1

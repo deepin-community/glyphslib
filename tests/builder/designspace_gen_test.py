@@ -14,16 +14,14 @@
 # limitations under the License.
 
 
-import io
 import os
+import fnmatch
 from fontTools.designspaceLib import DesignSpaceDocument
 from xmldiff import main, formatting
+from fontTools.varLib import FEAVAR_FEATURETAG_LIB_KEY
 
 import itertools
 import pytest
-
-import fontTools.feaLib.parser
-import fontTools.feaLib.ast
 
 import glyphsLib
 from glyphsLib import to_designspace, to_glyphs
@@ -157,10 +155,11 @@ def test_designspace_generation_same_weight_name(tmpdir, ufo_module):
     assert designspace.sources[0].filename != designspace.sources[2].filename
 
 
-def test_designspace_generation_brace_layers(datadir, ufo_module):
-    with open(str(datadir.join("BraceTestFont.glyphs"))) as f:
+@pytest.mark.parametrize("filename", ["BraceTestFont.glyphs", "BraceTestFontV3.glyphs"])
+def test_designspace_generation_brace_layers(datadir, filename, ufo_module):
+    with open(str(datadir.join(filename))) as f:
         font = glyphsLib.load(f)
-    designspace = to_designspace(font, ufo_module=ufo_module)
+    designspace = to_designspace(font, ufo_module=ufo_module, minimal=True)
 
     axes_order = [
         (a.name, a.minimum, a.default, a.maximum, a.map) for a in designspace.axes
@@ -170,17 +169,30 @@ def test_designspace_generation_brace_layers(datadir, ufo_module):
         ("Weight", 100, 100, 700, [(100, 100.0), (700, 1000.0)]),
     ]
 
-    source_order = [(s.filename, s.layerName, s.name) for s in designspace.sources]
-    assert source_order == [
-        ("NewFont-Light.ufo", None, "New Font Light"),
-        ("NewFont-Light.ufo", "{75}", "New Font Light {75}"),
-        ("NewFont-Bold.ufo", None, "New Font Bold"),
-        ("NewFont-Bold.ufo", "{75}", "New Font Bold {75}"),
-        ("NewFont-Bold.ufo", "Test2 {90.5, 500}", "New Font Bold Test2 {90.5, 500}"),
-        ("NewFont-Bold.ufo", "Test1 {90.5, 600}", "New Font Bold Test1 {90.5, 600}"),
-        ("NewFont-CondensedLight.ufo", None, "New Font Condensed Light"),
-        ("NewFont-CondensedBold.ufo", None, "New Font Condensed Bold"),
-    ]
+    for (fname, layerName, name, ufo), (exp_fname, exp_layerName, exp_name) in zip(
+        [(s.filename, s.layerName, s.name, s.font) for s in designspace.sources],
+        [
+            ("NewFont-Light.ufo", None, "New Font Light"),
+            ("NewFont-Light.ufo", "{75}", "New Font Light {75}"),
+            ("NewFont-Bold.ufo", None, "New Font Bold"),
+            ("NewFont-Bold.ufo", "{75}", "New Font Bold {75}"),
+            ("NewFont-Bold.ufo", "*{90.5, 500}", "New Font Bold *{90.5, 500}"),
+            ("NewFont-Bold.ufo", "*{90.5, 600}", "New Font Bold *{90.5, 600}"),
+            ("NewFont-CondensedLight.ufo", None, "New Font Condensed Light"),
+            ("NewFont-CondensedBold.ufo", None, "New Font Condensed Bold"),
+        ],
+    ):
+        assert fname == exp_fname
+        # the brace layer name for Glyphs3 is automatically generated from its
+        # coordinates and unlike in Glyphs2 won't contain any extra prefix, hence
+        # we only 'fnmatch' it.
+        # https://github.com/googlefonts/glyphsLib/issues/851
+        if exp_layerName is not None:
+            assert fnmatch.fnmatch(layerName, exp_layerName)
+            assert layerName in ufo.layers
+        else:
+            assert layerName is None
+        assert fnmatch.fnmatch(name, exp_name)
 
     # Check that all sources have a font object attached and sources with the same
     # filename have the same font object attached.
@@ -191,9 +203,13 @@ def test_designspace_generation_brace_layers(datadir, ufo_module):
             assert masters[source.filename] is source.font
         masters[source.filename] = source.font
 
+    # Check that brace layer glyph is created
+    assert len(designspace.sources[0].font.layers) == 2
 
-def test_designspace_generation_instances(datadir, ufo_module):
-    with open(str(datadir.join("BraceTestFont.glyphs"))) as f:
+
+@pytest.mark.parametrize("filename", ["BraceTestFont.glyphs", "BraceTestFontV3.glyphs"])
+def test_designspace_generation_instances(datadir, filename, ufo_module):
+    with open(str(datadir.join(filename))) as f:
         font = glyphsLib.load(f)
     designspace = to_designspace(font, ufo_module=ufo_module)
 
@@ -211,8 +227,9 @@ def test_designspace_generation_instances(datadir, ufo_module):
     ]
 
 
-def test_designspace_generation_on_disk(datadir, tmpdir, ufo_module):
-    glyphsLib.build_masters(str(datadir.join("BraceTestFont.glyphs")), str(tmpdir))
+@pytest.mark.parametrize("filename", ["BraceTestFont.glyphs", "BraceTestFontV3.glyphs"])
+def test_designspace_generation_on_disk(datadir, tmpdir, filename, ufo_module):
+    glyphsLib.build_masters(str(datadir.join(filename)), str(tmpdir))
 
     ufo_paths = list(tmpdir.visit(fil="*.ufo"))
     assert len(ufo_paths) == 4  # Source layers should not be written to disk.
@@ -234,32 +251,32 @@ def test_designspace_generation_bracket_roundtrip(datadir, ufo_module):
         font = glyphsLib.load(f)
     designspace = to_designspace(font, ufo_module=ufo_module)
 
-    assert designspace.rules[0].name == "BRACKET.300.600"
+    assert designspace.rules[0].name == "BRACKET.Weight_600_1000"
     assert designspace.rules[0].conditionSets == [
-        [dict(name="Weight", minimum=300, maximum=600)]
-    ]
-    assert designspace.rules[0].subs == [("x", "x.BRACKET.300")]
-
-    assert designspace.rules[1].name == "BRACKET.300.1000"
-    assert designspace.rules[1].conditionSets == [
-        [dict(name="Weight", minimum=300, maximum=1000)]
-    ]
-    assert designspace.rules[1].subs == [("a", "a.BRACKET.300")]
-
-    assert designspace.rules[2].name == "BRACKET.600.1000"
-    assert designspace.rules[2].conditionSets == [
         [dict(name="Weight", minimum=600, maximum=1000)]
     ]
-    assert designspace.rules[2].subs == [("x", "x.BRACKET.600")]
+    assert sorted(designspace.rules[0].subs) == [
+        ("a", "a.BRACKET.varAlt01"),
+        ("x", "x.BRACKET.varAlt02"),
+    ]
+
+    assert designspace.rules[1].name == "BRACKET.Weight_300_600"
+    assert designspace.rules[1].conditionSets == [
+        [dict(name="Weight", minimum=300, maximum=600)]
+    ]
+    assert sorted(designspace.rules[1].subs) == [
+        ("a", "a.BRACKET.varAlt01"),
+        ("x", "x.BRACKET.varAlt01"),
+    ]
 
     for source in designspace.sources:
         assert "[300]" not in source.font.layers
         assert "Something [300]" not in source.font.layers
         assert "[600]" not in source.font.layers
         assert "Other [600]" not in source.font.layers
-        g1 = source.font["x.BRACKET.300"]
+        g1 = source.font["x.BRACKET.varAlt01"]
         assert not g1.unicodes
-        g2 = source.font["x.BRACKET.600"]
+        g2 = source.font["x.BRACKET.varAlt02"]
         assert not g2.unicodes
 
     font_rt = to_glyphs(designspace)
@@ -295,7 +312,7 @@ def test_designspace_generation_bracket_roundtrip_psnames(datadir, ufo_module):
 
     assert designspace.findDefault().font.lib["public.postscriptNames"] == {
         "a-cy": "uni0430",
-        "a-cy.BRACKET.18": "uni0430.BRACKET.18",
+        "a-cy.BRACKET.varAlt01": "uni0430.BRACKET.varAlt01",
         "a-cy.alt": "uni0430.alt",
     }
 
@@ -304,7 +321,7 @@ def test_designspace_generation_bracket_roundtrip_psnames(datadir, ufo_module):
 
     assert designspace_rt.findDefault().font.lib["public.postscriptNames"] == {
         "a-cy": "uni0430",
-        "a-cy.BRACKET.18": "uni0430.BRACKET.18",
+        "a-cy.BRACKET.varAlt01": "uni0430.BRACKET.varAlt01",
         "a-cy.alt": "uni0430.alt",
     }
 
@@ -313,11 +330,12 @@ def test_designspace_generation_bracket_roundtrip_psnames(datadir, ufo_module):
 
     assert designspace_rt2.findDefault().font.lib["public.postscriptNames"] == {
         "a-cy": "uni0430",
-        "a-cy.BRACKET.18": "uni0430.BRACKET.18",
+        "a-cy.BRACKET.varAlt01": "uni0430.BRACKET.varAlt01",
         "a-cy.alt": "uni0430.alt",
     }
 
 
+@pytest.mark.xfail
 def test_designspace_generation_bracket_roundtrip_no_layername(datadir, ufo_module):
     with open(str(datadir.join("BracketTestFont.glyphs"))) as f:
         font = glyphsLib.load(f)
@@ -349,14 +367,14 @@ def test_designspace_generation_bracket_unbalanced_brackets(datadir, ufo_module)
     designspace = to_designspace(font, ufo_module=ufo_module)
 
     for source in designspace.sources:
-        assert "C.BRACKET.600" in source.font
+        assert "C.BRACKET.varAlt01" in source.font
 
     font_rt = to_glyphs(designspace)
 
     assert "C" in font_rt.glyphs
 
     assert {l.name for l in font_rt.glyphs["C"].layers} == layer_names
-    assert "C.BRACKET.600" not in font_rt.glyphs
+    assert "C.BRACKET.varAlt01" not in font_rt.glyphs
 
 
 def test_designspace_generation_bracket_composite_glyph(datadir, ufo_module):
@@ -371,9 +389,12 @@ def test_designspace_generation_bracket_composite_glyph(datadir, ufo_module):
 
     for source in designspace.sources:
         ufo = source.font
-        assert "B.BRACKET.600" in ufo
+        assert "B.BRACKET.varAlt01" in ufo
         assert ufo["B"].components[0].baseGlyph == "A"
-        assert ufo["B.BRACKET.600"].components[0].baseGlyph == "A.BRACKET.600"
+        assert ufo["B.BRACKET.varAlt01"].components[0].baseGlyph == "A.BRACKET.varAlt01"
+        # G has no alternate layers, but it uses a component
+        # which does, so it too must develop some.
+        assert "G.BRACKET.varAlt01" in ufo
 
     font_rt = to_glyphs(designspace)
 
@@ -396,15 +417,20 @@ def test_designspace_generation_reverse_bracket_roundtrip(datadir, ufo_module):
 
     designspace = to_designspace(font, ufo_module=ufo_module)
 
-    assert designspace.rules[1].name == "BRACKET.400.600"
-    assert designspace.rules[1].conditionSets == [
-        [dict(name="Weight", minimum=400, maximum=600)]
+    # Bottom box should include substitutions for D (400->600)
+    assert designspace.rules[2].name == "BRACKET.Weight_400_570"
+    assert designspace.rules[2].conditionSets == [
+        [dict(name="Weight", minimum=400, maximum=570)]
     ]
-    assert designspace.rules[1].subs == [("D", "D.REV_BRACKET.600")]
+    assert designspace.rules[2].subs == [
+        ("D", "D.BRACKET.varAlt01"),
+        ("E", "E.BRACKET.varAlt01"),
+        ("F", "F.BRACKET.varAlt02"),
+    ]
 
     for source in designspace.sources:
         ufo = source.font
-        assert "D.REV_BRACKET.600" in ufo
+        assert "D.BRACKET.varAlt01" in ufo
 
     font_rt = to_glyphs(designspace)
 
@@ -413,7 +439,7 @@ def test_designspace_generation_reverse_bracket_roundtrip(datadir, ufo_module):
     g2 = font_rt.glyphs["D"]
     assert {"Regular ]600]", "Bold ]600]"}.intersection(l.name for l in g2.layers)
 
-    assert "D.REV_BRACKET.600" not in font_rt.glyphs
+    assert "D.BRACKET.wght_400_600" not in font_rt.glyphs
 
 
 def test_designspace_generation_bracket_no_export_glyph(datadir, ufo_module):
@@ -423,7 +449,7 @@ def test_designspace_generation_bracket_no_export_glyph(datadir, ufo_module):
     font.glyphs["E"].export = False
 
     designspace = to_designspace(
-        font, write_skipexportglyphs=True, ufo_module=ufo_module
+        font, write_skipexportglyphs=True, ufo_module=ufo_module, minimal=False
     )
 
     assert "E" in designspace.lib.get("public.skipExportGlyphs")
@@ -461,34 +487,77 @@ def test_designspace_generation_bracket_GDEF(datadir, ufo_module):
     designspace = to_designspace(font, ufo_module=ufo_module, generate_GDEF=True)
 
     for source in designspace.sources:
-        ufo = source.font
-        features = fontTools.feaLib.parser.Parser(
-            io.StringIO(ufo.features.text), glyphNames=ufo.keys()
-        ).parse()
-        for stmt in features.statements:
-            if (
-                isinstance(stmt, fontTools.feaLib.ast.TableBlock)
-                and stmt.name == "GDEF"
-            ):
-                gdef = stmt
-                for stmt in gdef.statements:
-                    if isinstance(stmt, fontTools.feaLib.ast.GlyphClassDefStatement):
-                        glyph_class_defs = stmt
-                        break
-                else:
-                    pytest.fail(
-                        f"No GDEF.GlyphClassDef statement found in {ufo!r} features:\n"
-                        f"{ufo.features.text}"
-                    )
-                break
-        else:
-            pytest.fail(
-                f"No GDEF table definition found in {ufo!r} features:\n"
-                f"{ufo.features.text}"
-            )
+        categories = source.font.lib["public.openTypeCategories"]
 
-        assert set(glyph_class_defs.baseGlyphs.glyphSet()) == {
-            "x",
-            "x.BRACKET.300",
-            "x.BRACKET.600",
+        assert categories == {
+            "x": "base",
+            "x.BRACKET.varAlt01": "base",
+            "x.BRACKET.varAlt02": "base",
         }
+
+
+def test_designspace_generation_bracket_glyphs3_simple(datadir, ufo_module):
+    with open(str(datadir.join("Alternate-g3-axis1.glyphs"))) as f:
+        font = glyphsLib.load(f)
+
+    designspace = to_designspace(font, ufo_module=ufo_module)
+
+    for source in designspace.sources:
+        assert "A.BRACKET.varAlt01" in source.font
+
+
+def test_designspace_generation_bracket_rclt_roundtrip(datadir, ufo_module):
+    with open(str(datadir.join("BracketTestFont.glyphs"))) as f:
+        font = glyphsLib.load(f)
+    font.customParameters["Feature for Feature Variations"] = "rclt"
+    designspace = to_designspace(font, ufo_module=ufo_module)
+    assert designspace.rulesProcessingLast
+
+    font_rt = to_glyphs(designspace)
+    assert font_rt.customParameters["Feature for Feature Variations"] == "rclt"
+
+
+def test_designspace_generation_bracket_other_roundtrip(datadir, ufo_module):
+    with open(str(datadir.join("BracketTestFont.glyphs"))) as f:
+        font = glyphsLib.load(f)
+    font.customParameters["Feature for Feature Variations"] = "calt"
+    designspace = to_designspace(font, ufo_module=ufo_module)
+    assert FEAVAR_FEATURETAG_LIB_KEY in designspace.lib
+    assert designspace.lib[FEAVAR_FEATURETAG_LIB_KEY] == "calt"
+
+    font_rt = to_glyphs(designspace)
+    assert font_rt.customParameters["Feature for Feature Variations"] == "calt"
+
+
+def test_designspace_generation_multiaxis_bracket(datadir, ufo_module):
+    with open(str(datadir.join("Playfair-v.glyphs")), encoding="utf-8") as f:
+        font = glyphsLib.load(f)
+
+    # Remove names of bracket layers, make sure the layers get
+    # copied anyway
+    for l in font.glyphs["v"].layers:
+        if l._is_bracket_layer():
+            l.name = ""
+
+    designspace = to_designspace(font, ufo_module=ufo_module)
+    axes = designspace.axes
+    info = font.glyphs["v"].layers[8]._bracket_info(axes)
+    assert info == {"opsz": (5, 410), "wdth": (50, 75), "wght": (690, 900)}
+
+    for source in designspace.sources:
+        assert "v.BRACKET.varAlt01" in source.font
+
+    assert (
+        designspace.rules[0].name
+        == "BRACKET.Optical size_5_410.Weight_690_900.Width_50_75"
+    )
+    assert designspace.rules[0].conditionSets == [
+        [
+            dict(name="Optical size", minimum=5, maximum=410),
+            dict(name="Width", minimum=50, maximum=75),
+            dict(name="Weight", minimum=690, maximum=900),
+        ]
+    ]
+    assert designspace.rules[0].subs == [
+        ("v", "v.BRACKET.varAlt01"),
+    ]

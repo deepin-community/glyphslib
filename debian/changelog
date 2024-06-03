@@ -1,3 +1,36 @@
+glyphslib (6.4.0+ds1-1~exp1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream version 6.4.0+ds1.
+    + Upload to experimental for now before dependencies are
+      updated properly.
+  * debian/gbp.conf: Enable ignore-branch = True.
+  * debian/watch: Fix upstream monitoring script. (Closes: #1051199)
+  * debian/control: Switch to pybuild-plugin-pyproject plugin
+    and dh-sequence-python3 build-dependency.
+  * debian/rules: Ditto.
+  * debian/rules: Do not remove {build_dir}/*.txt after test.
+    These files are not generated during test now.
+
+ -- Boyuan Yang <byang@debian.org>  Fri, 22 Sep 2023 09:00:30 -0400
+
+glyphslib (6.0.6+ds1-1) unstable; urgency=medium
+
+  * New upstream version 6.0.6+ds1
+  * debian/copyright: Add licenses for test files
+  * debian/gbp.conf: change debian-branch to debian/latest to follow DEP-14
+  * debian/rules:
+    - Remove dh_clean override
+    - Skip tests that requires skia-pathops
+  * debian/control:
+    - Update dependencies
+    - Bump Standards-Version to 4.6.1.  No other changes are needed.
+  * debian/patches: Add patch for Designspace generation tests,
+    Closes: #1013363
+  * debian/tests/control: Fix autopkgtest commands
+
+ -- Yao Wei (魏銘廷) <mwei@debian.org>  Sat, 30 Jul 2022 11:00:18 +0800
+
 glyphslib (5.3.2+ds1-1) unstable; urgency=medium
 
   * New upstream version 5.3.2+ds1

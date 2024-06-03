@@ -4,19 +4,23 @@ Priority: optional
 Maintainer: Debian Fonts Task Force <debian-fonts@lists.debian.org>
 Uploaders: Yao Wei (魏銘廷) <mwei@debian.org>
 Build-Depends: debhelper-compat (= 13),
-               dh-python,
+               dh-sequence-python3,
+               pybuild-plugin-pyproject,
                python3-all,
                python3-setuptools,
                python3-setuptools-scm,
+               pybuild-plugin-pyproject,
                python3-defcon (>= 0.7.2),
                python3-ufonormalizer (>= 0.5.3),
-               python3-fonttools (>= 4.19.0),
-               python3-ufolib2 (>= 0.11.1),
+               python3-fonttools (>= 4.32.0),
+               python3-ufolib2 (>= 0.13.1),
+               python3-openstep-plist (>= 0.3.0),
+               python3-ufo2ft (>= 2.27.0),
                python3-pytest,
                python3-wheel,
                xmldiff (>= 2.4),
                glyphsinfo (>= 1193),
-Standards-Version: 4.5.1
+Standards-Version: 4.6.2
 Homepage: https://github.com/googlefonts/glyphsLib
 Vcs-Git: https://salsa.debian.org/fonts-team/glyphslib.git
 Vcs-Browser: https://salsa.debian.org/fonts-team/glyphslib
@@ -44,6 +48,7 @@ Depends: ${misc:Depends},
          glyphsinfo (>= 1193),
          python3-defcon (>= 0.7.2),
          python3-ufonormalizer (>= 0.5.3),
+         python3-openstep-plist (>= 0.3.0),
 Description: Library for converting between Glyphs files (.glyphs) and UFOs
  This tool provides conversions between Glyphs source files (.glyphs) and
  Unified Font Objects (UFOs) via defcon.

@@ -51,34 +51,6 @@ def test_designspace_lib_equivalent_to_font_user_data(tmpdir):
     assert designspace.lib["designspaceLibKey1"] == "designspaceLibValue1"
 
 
-def test_default_featureWriters_in_designspace_lib(tmpdir, ufo_module):
-    """Test that the glyphsLib custom featureWriters settings (with mode="append")
-    are exported to the designspace lib whenever a GSFont contains a manual 'kern'
-    feature. And that they are not imported back to GSFont.userData if they are
-    the same as the default value.
-    """
-    font = classes.GSFont()
-    font.masters.append(classes.GSFontMaster())
-    kern = classes.GSFeature(name="kern", code="pos a b 100;")
-    font.features.append(kern)
-
-    designspace = to_designspace(font, ufo_module=ufo_module)
-    path = str(tmpdir / "test.designspace")
-    designspace.write(path)
-    for source in designspace.sources:
-        source.font.save(str(tmpdir / source.filename))
-
-    designspace2 = DesignSpaceDocument.fromfile(path)
-
-    assert UFO2FT_FEATURE_WRITERS_KEY in designspace2.lib
-    assert designspace2.lib[UFO2FT_FEATURE_WRITERS_KEY] == DEFAULT_FEATURE_WRITERS
-
-    font2 = to_glyphs(designspace2, ufo_module=ufo_module)
-
-    assert not len(font2.userData)
-    assert len([f for f in font2.features if f.name == "kern"]) == 1
-
-
 def test_custom_featureWriters_in_designpace_lib(tmpdir, ufo_module):
     """Test that we can roundtrip custom user-defined ufo2ft featureWriters
     settings that are stored in the designspace lib or GSFont.userData.
@@ -198,29 +170,74 @@ def test_ufo_data_into_font_master_user_data(tmpdir, ufo_module):
     assert ufo.data[filename] == data
 
 
-def test_layer_lib_into_font_user_data(ufo_module):
-    ufo = ufo_module.Font()
-    ufo.layers["public.default"].lib["layerLibKey1"] = "layerLibValue1"
-    layer = ufo.newLayer("sketches")
-    layer.lib["layerLibKey2"] = "layerLibValue2"
+def test_layer_lib_into_master_user_data(ufo_module):
+    ufo1 = ufo_module.Font()
+    ufo1.layers["public.default"].lib["layerLibKey1"] = "ufo1 layerLibValue1"
+    layer = ufo1.newLayer("sketches")
+    layer.lib["layerLibKey2"] = "ufo1 layerLibValue2"
     # layers won't roundtrip if they contain no glyph, except for the default
     layer.newGlyph("bob")
+    ufo2 = ufo_module.Font()
+    ufo2.layers["public.default"].lib["layerLibKey1"] = "ufo2 layerLibValue1"
+    layer = ufo2.newLayer("sketches")
+    layer.lib["layerLibKey2"] = "ufo2 layerLibValue2"
+    layer.newGlyph("bob")
 
-    font = to_glyphs([ufo])
+    font = to_glyphs([ufo1, ufo2])
 
-    assert font.userData[GLYPHLIB_PREFIX + "layerLib.public.default"] == {
-        "layerLibKey1": "layerLibValue1"
+    default_layer_key = GLYPHLIB_PREFIX + "layerLib.public.default"
+    sketches_layer_key = GLYPHLIB_PREFIX + "layerLib.sketches"
+    assert default_layer_key not in font.userData
+    assert sketches_layer_key not in font.userData
+    assert font.masters[0].userData[default_layer_key] == {
+        "layerLibKey1": "ufo1 layerLibValue1"
     }
-    assert font.userData[GLYPHLIB_PREFIX + "layerLib.sketches"] == {
-        "layerLibKey2": "layerLibValue2"
+    assert font.masters[0].userData[sketches_layer_key] == {
+        "layerLibKey2": "ufo1 layerLibValue2"
+    }
+    assert font.masters[1].userData[default_layer_key] == {
+        "layerLibKey1": "ufo2 layerLibValue1"
+    }
+    assert font.masters[1].userData[sketches_layer_key] == {
+        "layerLibKey2": "ufo2 layerLibValue2"
     }
 
-    (ufo,) = to_ufos(font)
+    (ufo1, ufo2) = to_ufos(font, minimal=False)
 
-    assert ufo.layers["public.default"].lib["layerLibKey1"] == "layerLibValue1"
-    assert "layerLibKey1" not in ufo.layers["sketches"].lib
-    assert ufo.layers["sketches"].lib["layerLibKey2"] == "layerLibValue2"
-    assert "layerLibKey2" not in ufo.layers["public.default"].lib
+    assert ufo1.layers["public.default"].lib["layerLibKey1"] == "ufo1 layerLibValue1"
+    assert "layerLibKey1" not in ufo1.layers["sketches"].lib
+    assert ufo1.layers["sketches"].lib["layerLibKey2"] == "ufo1 layerLibValue2"
+    assert "layerLibKey2" not in ufo1.layers["public.default"].lib
+    assert ufo2.layers["public.default"].lib["layerLibKey1"] == "ufo2 layerLibValue1"
+    assert "layerLibKey1" not in ufo2.layers["sketches"].lib
+    assert ufo2.layers["sketches"].lib["layerLibKey2"] == "ufo2 layerLibValue2"
+    assert "layerLibKey2" not in ufo2.layers["public.default"].lib
+
+
+def test_layer_lib_in_font_user_data(ufo_module):
+    font = classes.GSFont()
+    font.masters.append(classes.GSFontMaster())
+    font.masters.append(classes.GSFontMaster())
+    glyph = classes.GSGlyph(name="a")
+    font.glyphs.append(glyph)
+    layer = classes.GSLayer()
+    layer.layerId = font.masters[0].id
+    layer.width = 0
+    glyph.layers.append(layer)
+    layer = classes.GSLayer()
+    layer.layerId = font.masters[1].id
+    layer.width = 0
+    glyph.layers.append(layer)
+
+    font.userData[GLYPHLIB_PREFIX + "layerLib.public.default"] = {
+        "layerLibKey": "layerLibValue"
+    }
+
+    ufo1, ufo2 = to_ufos(font)
+    assert "layerLibKey" in ufo1.layers["public.default"].lib
+    assert ufo1.layers["public.default"].lib["layerLibKey"] == "layerLibValue"
+    assert "layerLibKey" in ufo2.layers["public.default"].lib
+    assert ufo2.layers["public.default"].lib["layerLibKey"] == "layerLibValue"
 
 
 def test_glyph_user_data_into_ufo_lib():
@@ -276,7 +293,7 @@ def test_glif_lib_equivalent_to_layer_user_data(ufo_module):
     assert "glifLibKeyB" not in default_layer.userData.keys()
     assert middleground.userData["glifLibKeyB"] == "glifLibValueB"
 
-    (ufo,) = to_ufos(font)
+    (ufo,) = to_ufos(font, minimal=False)
 
     assert ufo["a"].lib["glifLibKeyA"] == "glifLibValueA"
     assert "glifLibKeyA" not in ufo.layers["middleground"]["a"]

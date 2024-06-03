@@ -72,6 +72,11 @@ def main(args=None):
         "Roundtripping between Glyphs and UFOs"
     )
     group.add_argument(
+        "--minimal",
+        action="store_true",
+        help=("Create minimal UFO files with only data needed for building fonts."),
+    )
+    group.add_argument(
         "--no-preserve-glyphsapp-metadata",
         action="store_false",
         help=(
@@ -82,6 +87,7 @@ def main(args=None):
     )
     group.add_argument(
         "--propagate-anchors",
+        default=None,
         action="store_true",
         help=(
             "Copy anchors from underlying components to actual "
@@ -89,12 +95,25 @@ def main(args=None):
             "full control over all anchors."
         ),
     )
-    group.add_argument(
+    gdef_gen_group = group.add_mutually_exclusive_group()
+    gdef_gen_group.add_argument(
         "--generate-GDEF",
         action="store_true",
+        default=False,
+        dest="generate_GDEF",
         help=(
-            "write a `table GDEF {...}` statement in the UFO features "
-            "containing `GlyphClassDef` and `LigatureCaretByPos` statements"
+            "Write GDEF categories into the UFO's `public.openTypeCatgeories` lib key."
+        ),
+    )
+    gdef_gen_group.add_argument(
+        "--no-generate-GDEF",
+        action="store_false",
+        default=False,
+        dest="generate_GDEF",
+        help=(
+            "Skip writing GDEF categories into the UFO's "
+            "`public.openTypeCatgeories` lib key (default behavior, for backward "
+            "compatibility)."
         ),
     )
     group.add_argument(
@@ -130,6 +149,24 @@ def main(args=None):
             "Store the glyph export flag in the `public.skipExportGlyphs` list "
             "instead of the glyph-level 'com.schriftgestaltung.Glyphs.Export' lib "
             "key."
+        ),
+    )
+    group.add_argument(
+        "--expand-includes",
+        action="store_true",
+        help=(
+            "Expand include statements in the .glyphs features and inline them in "
+            "the exported UFO features.fea."
+        ),
+    )
+    group = parser_glyphs2ufo.add_argument_group("Glyph data")
+    group.add_argument(
+        "--glyph-data",
+        action="append",
+        metavar="GLYPHDATA",
+        help=(
+            "Custom GlyphData XML file with glyph info (production name, "
+            "script, category, subCategory, etc.). Can be used more than once."
         ),
     )
 
@@ -182,6 +219,14 @@ def main(args=None):
         action="store_false",
         help="Enable automatic alignment of components in glyphs.",
     )
+    group.add_argument(
+        "--expand-includes",
+        action="store_true",
+        help=(
+            "Expand include statements in the UFO features.fea and inline them in "
+            "the exported .glyphs features."
+        ),
+    )
 
     options = parser.parse_args(args)
 
@@ -217,7 +262,10 @@ def glyphs2ufo(options):
         generate_GDEF=options.generate_GDEF,
         store_editor_state=not options.no_store_editor_state,
         write_skipexportglyphs=options.write_public_skip_export_glyphs,
+        expand_includes=options.expand_includes,
         ufo_module=__import__(options.ufo_module),
+        minimal=options.minimal,
+        glyph_data=options.glyph_data or None,
     )
 
 
@@ -267,6 +315,7 @@ def ufo2glyphs(options):
         object_to_read,
         ufo_module=ufo_module,
         minimize_ufo_diffs=options.no_preserve_glyphsapp_metadata,
+        expand_includes=options.expand_includes,
     )
 
     # Make the Glyphs file more suitable for roundtrip:

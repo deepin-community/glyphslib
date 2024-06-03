@@ -15,6 +15,19 @@ Files:     tests/data/MontserratStrippedDown.glyphs
 Copyright: 2011 The Montserrat Project Authors
 License:   OFL-1.1
 
+Files:     tests/data/designspace/roboto/*
+Copyright: 2011 Google
+License:   Apache-2.0
+
+Files:     tests/data/designspace/source-sans/*
+Copyright: 2010-2021 Adobe
+Comment:   With Reserved Font Name 'Source'
+License:   OFL-1.1
+
+Files:     tests/data/designspace/spectral/*
+Copyright: 2017 Production Type <info@productiontype.com>
+License:   OFL-1.1
+
 License:   Apache-2.0
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.

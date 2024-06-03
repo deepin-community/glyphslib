@@ -12,18 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 
+import os
 import re
 from textwrap import dedent
 from io import StringIO
+from typing import TYPE_CHECKING
 
 from fontTools.feaLib import ast, parser
 
-from .constants import GLYPHLIB_PREFIX
+from glyphsLib.util import PeekableIterator
+from .constants import (
+    GLYPHLIB_PREFIX,
+    ANONYMOUS_FEATURE_PREFIX_NAME,
+    ORIGINAL_FEATURE_CODE_KEY,
+    ORIGINAL_CATEGORY_KEY,
+    LANGUAGE_MAPPING,
+    REVERSE_LANGUAGE_MAPPING,
+    INSERT_FEATURE_MARKER_RE,
+    INSERT_FEATURE_MARKER_COMMENT,
+)
+from .tokens import TokenExpander, PassThruExpander
 
+if TYPE_CHECKING:
+    from ufoLib2 import Font
 
-ANONYMOUS_FEATURE_PREFIX_NAME = "<anonymous>"
-ORIGINAL_FEATURE_CODE_KEY = GLYPHLIB_PREFIX + "originalFeatureCode"
+    from ..classes import GSFont, GSFontMaster
+    from . import UFOBuilder
 
 
 def autostr(automatic):
@@ -36,35 +52,55 @@ def to_ufo_master_features(self, ufo, master):
     if original is not None:
         ufo.features.text = original
     else:
-        skip_export_glyphs = self._designspace.lib.get("public.skipExportGlyphs")
         ufo.features.text = _to_ufo_features(
             self.font,
             ufo,
             generate_GDEF=self.generate_GDEF,
-            skip_export_glyphs=skip_export_glyphs,
+            master=master,
+            expand_includes=self.expand_includes,
         )
 
 
-def _to_ufo_features(font, ufo=None, generate_GDEF=False, skip_export_glyphs=None):
+def _to_name_langID(language):
+    if language not in LANGUAGE_MAPPING:
+        raise ValueError(f"Unknown name language: {language}")
+    return LANGUAGE_MAPPING[language]
+
+
+def _to_glyphs_language(langID):
+    if langID not in REVERSE_LANGUAGE_MAPPING:
+        raise ValueError(f"Unknown name langID: {langID}")
+    return REVERSE_LANGUAGE_MAPPING[langID]
+
+
+def _is_manual_kern_feature(feature):
+    """Return true if the feature is a manually written 'kern' features."""
+    return feature.name == "kern" and not feature.automatic
+
+
+def _to_ufo_features(
+    font: GSFont,
+    ufo: Font | None = None,
+    generate_GDEF: bool = False,
+    master: GSFontMaster | None = None,
+    expand_includes: bool = False,
+) -> str:
     """Convert GSFont features, including prefixes and classes, to UFO.
 
     Optionally, build a GDEF table definiton, excluding 'skip_export_glyphs'.
-
-    Args:
-        font: GSFont
-        ufo: Optional[defcon.Font]
-        generate_GDEF: bool
-        skip_export_glyphs: Optional[List[str]]
-
-    Returns: str
     """
+    if not master:
+        expander = PassThruExpander()
+    else:
+        expander = TokenExpander(font, master)
+
     prefixes = []
     for prefix in font.featurePrefixes:
         strings = []
         if prefix.name != ANONYMOUS_FEATURE_PREFIX_NAME:
             strings.append("# Prefix: %s\n" % prefix.name)
         strings.append(autostr(prefix.automatic))
-        strings.append(prefix.code)
+        strings.append(expander.expand(prefix.code))
         prefixes.append("".join(strings))
 
     prefix_str = "\n\n".join(prefixes)
@@ -74,17 +110,51 @@ def _to_ufo_features(font, ufo=None, generate_GDEF=False, skip_export_glyphs=Non
         prefix = "@" if not class_.name.startswith("@") else ""
         name = prefix + class_.name
         class_defs.append(
-            "{}{} = [ {} ];".format(autostr(class_.automatic), name, class_.code)
+            "{}{} = [ {}\n];".format(
+                autostr(class_.automatic), name, expander.expand(class_.code)
+            )
         )
     class_str = "\n\n".join(class_defs)
 
     feature_defs = []
     for feature in font.features:
-        code = feature.code
+        code = expander.expand(feature.code)
         lines = ["feature %s {" % feature.name]
-        if feature.notes:
+        notes = feature.notes
+        feature_names = None
+        if font.format_version == 2 and notes:
+            m = re.search("(featureNames {.+};)", notes, flags=re.DOTALL)
+            if m:
+                name = m.groups()[0]
+                # Remove the name from the note
+                notes = notes.replace(name, "").strip()
+                feature_names = name.splitlines()
+            else:
+                m = re.search(r"^(Name: (.+))", notes)
+                if m:
+                    line, name = m.groups()
+                    # Remove the name from the note
+                    notes = notes.replace(line, "").strip()
+                    # Replace special chars backslash and doublequote for AFDKO syntax
+                    name = name.replace("\\", r"\005c").replace('"', r"\0022")
+                    feature_names = ["featureNames {", f'  name "{name}";', "};"]
+        elif font.format_version == 3 and feature.labels:
+            feature_names = []
+            feature_names.append("featureNames {")
+            for label in feature.labels:
+                langID = _to_name_langID(label["language"])
+                name = label["value"]
+                name = name.replace("\\", r"\005c").replace('"', r"\0022")
+                if langID is None:
+                    feature_names.append(f'  name "{name}";')
+                else:
+                    feature_names.append(f'  name 3 1 0x{langID:X} "{name}";')
+            feature_names.append("};")
+        if notes:
             lines.append("# notes:")
-            lines.extend("# " + line for line in feature.notes.splitlines())
+            lines.extend("# " + line for line in notes.splitlines())
+        if feature_names:
+            lines.extend(feature_names)
         if feature.automatic:
             lines.append("# automatic")
         if feature.disabled:
@@ -92,34 +162,52 @@ def _to_ufo_features(font, ufo=None, generate_GDEF=False, skip_export_glyphs=Non
             lines.extend("#" + line for line in code.splitlines())
         else:
             lines.append(code)
+
+        # Manual kern features in glyphs also have the automatic code added after them
+        # We make sure it gets added with an "Automatic Code..." marker if it doesn't
+        # already have one.
+        if _is_manual_kern_feature(feature) and not re.search(
+            INSERT_FEATURE_MARKER_RE, code
+        ):
+            lines.append(INSERT_FEATURE_MARKER_COMMENT)
+
         lines.append("} %s;" % feature.name)
         feature_defs.append("\n".join(lines))
     fea_str = "\n\n".join(feature_defs)
 
-    # Don't add a GDEF table when planning to round-trip. To get Glyphs.app-like
-    # results, we would need anchor propagation or user intervention. Glyphs.app
-    # only generates it on generating binaries.
-    gdef_str = None
     if generate_GDEF:
         assert ufo is not None
-        if re.search(r"^\s*table\s+GDEF\s+{", prefix_str, flags=re.MULTILINE):
-            raise ValueError(
-                "The features already contain a `table GDEF {...}` statement. "
-                "Either delete it or set generate_GDEF to False."
-            )
-        gdef_str = _build_gdef(ufo, skip_export_glyphs)
+        regenerate_opentype_categories(font, ufo)
 
-    full_text = (
-        "\n\n".join(filter(None, [class_str, prefix_str, fea_str, gdef_str])) + "\n"
+    full_text = "\n\n".join(filter(None, [class_str, prefix_str, fea_str])) + "\n"
+    full_text = full_text if full_text.strip() else ""
+
+    if not full_text or not expand_includes:
+        return full_text
+
+    # use feaLib Parser to resolve include statements relative to the GSFont
+    # fontpath, and inline them in the output features text.
+    feature_file = StringIO(full_text)
+    include_dir = os.path.dirname(font.filepath) if font.filepath else None
+    fea_parser = parser.Parser(
+        feature_file,
+        glyphNames={glyph.name for glyph in font.glyphs},
+        includeDir=include_dir,
+        followIncludes=expand_includes,
     )
-    return full_text if full_text.strip() else ""
+    doc = fea_parser.parse()
+    return doc.asFea()
 
 
-def _build_gdef(ufo, skipExportGlyphs=None):
-    """Build a GDEF table statement (GlyphClassDef and LigatureCaretByPos).
+def _build_public_opentype_categories(ufo: Font) -> dict[str, str]:
+    """Returns a dictionary mapping glyph names to GDEF categories.
 
-    Building GlyphClassDef requires anchor propagation or user care to work as
-    expected, as Glyphs.app also looks at anchors for classification:
+    Does not handle ligature carets. A GDEF table with both categories and
+    ligature carets is generated by ufo2ft's GdefFeatureWriter at compile time,
+    using the categories dict and glyph data.
+
+    Determining the categories requires anchor propagation or user care to work
+    as expected, as Glyphs.app also looks at anchors for classification:
 
     * Base: any glyph that has an attaching anchor (such as "top"; "_top" does
       not count) and is neither classified as Ligature nor Mark using the
@@ -137,95 +225,67 @@ def _build_gdef(ufo, skipExportGlyphs=None):
     """
     from glyphsLib import glyphdata
 
-    bases, ligatures, marks, carets = set(), set(), set(), {}
+    categories: dict[str, str] = {}
     category_key = GLYPHLIB_PREFIX + "category"
     subCategory_key = GLYPHLIB_PREFIX + "subCategory"
 
+    # NOTE: We can generate the category even for glyphs that are not exported,
+    # because entries don't have to exist in the final fonts.
     for glyph in ufo:
-        # Do not generate any entries for non-export glyphs, as looking them up on
-        # compilation will fail.
-        if skipExportGlyphs is not None:
-            if glyph.name in skipExportGlyphs:
-                continue
+        glyph_name = glyph.name
+        assert glyph_name is not None
 
         has_attaching_anchor = False
         for anchor in glyph.anchors:
             name = anchor.name
             if name and not name.startswith("_"):
                 has_attaching_anchor = True
-            if name and name.startswith("caret_") and "x" in anchor:
-                carets.setdefault(glyph.name, []).append(round(anchor["x"]))
 
         # First check glyph.lib for category/subCategory overrides. Otherwise,
         # use global values from GlyphData.
-        glyphinfo = glyphdata.get_glyph(glyph.name)
+        glyphinfo = glyphdata.get_glyph(
+            glyph_name, unicodes=[f"{c:04X}" for c in glyph.unicodes]
+        )
         category = glyph.lib.get(category_key) or glyphinfo.category
         subCategory = glyph.lib.get(subCategory_key) or glyphinfo.subCategory
 
         if subCategory == "Ligature" and has_attaching_anchor:
-            ligatures.add(glyph.name)
+            categories[glyph_name] = "ligature"
         elif category == "Mark" and (
             subCategory == "Nonspacing" or subCategory == "Spacing Combining"
         ):
-            marks.add(glyph.name)
+            categories[glyph_name] = "mark"
         elif has_attaching_anchor:
-            bases.add(glyph.name)
+            categories[glyph_name] = "base"
 
-    if not any((bases, ligatures, marks, carets)):
-        return None
-
-    def sortkey(glyph_name):
-        try:
-            return ufo.glyphOrder.index(glyph_name), glyph_name
-        except ValueError:
-            return len(ufo.glyphOrder), glyph_name
-
-    def fmt(glyphs):
-        return ("[%s]" % " ".join(sorted(glyphs, key=sortkey))) if glyphs else ""
-
-    lines = [
-        "table GDEF {",
-        "  # automatic",
-        "  GlyphClassDef",
-        "    %s, # Base" % fmt(bases),
-        "    %s, # Liga" % fmt(ligatures),
-        "    %s, # Mark" % fmt(marks),
-        "    ;",
-    ]
-    for glyph, caretPos in sorted(carets.items()):
-        lines.append(
-            "  LigatureCaretByPos %s %s;"
-            % (glyph, " ".join(str(p) for p in sorted(caretPos)))
-        )
-    lines.append("} GDEF;")
-
-    return "\n".join(lines)
+    return categories
 
 
-def regenerate_gdef(self):
-    skip_export_glyphs = self._designspace.lib.get("public.skipExportGlyphs")
-    for master_id, source in self._sources.items():
-        master = self.font.masters[master_id]
-        ufo = source.font
+def regenerate_gdef(self: UFOBuilder) -> None:
+    for source in self._sources.values():
+        regenerate_opentype_categories(self.font, source.font)
 
-        if (
-            master.userData[ORIGINAL_FEATURE_CODE_KEY]
-            or "GDEF" not in ufo.features.text
-        ):
-            continue
 
-        new_gdef = _build_gdef(ufo, skip_export_glyphs)
-        if new_gdef:
-            # string enclosing 'table GDEF {...} GDEF;' before replacing content
-            new_gdef = "\n".join(new_gdef.splitlines()[1:-1])
-            ufo.features.text = replace_table("GDEF", new_gdef, ufo.features.text)
+def regenerate_opentype_categories(font: GSFont, ufo: Font) -> None:
+    categories = _build_public_opentype_categories(ufo)
+
+    # Prefer already stored categories for round-tripping. This will provide
+    # newly guessed categories only for new glyphs. The data is stored
+    # GSFont-wide to capture bracket glyphs that we create for UFOs and fold
+    # when going back.
+    roundtripping_categories = font.userData[ORIGINAL_CATEGORY_KEY]
+    if roundtripping_categories is not None:
+        categories.update(roundtripping_categories)
+
+    if categories:
+        ufo.lib["public.openTypeCategories"] = categories
 
 
 def _replace_block(kind, tag, repl, features):
     if not repl.endswith("\n"):
         repl += "\n"
     return re.sub(
-        fr"(?<=^{kind} {tag} {{\n)(.*?)(?=^}} {tag};$)",
+        rf"(?<=^{kind} {tag} {{\n)(.*?)(?=^}} {tag};$)",
         repl,
         features,
         count=1,
@@ -267,6 +327,9 @@ def replace_prefixes(repl_map, features_text, glyph_names=None):
     return _to_ufo_features(temp_font)
 
 
+# UFO to Glyphs
+
+
 def to_glyphs_features(self):
     if not self.designspace.sources:
         # Needs at least one UFO
@@ -295,15 +358,33 @@ def to_glyphs_features(self):
     ufo = self.designspace.sources[0].font
     if ufo.features.text is None:
         return
+    include_dir = None
+    if self.expand_includes and ufo.path:
+        include_dir = os.path.dirname(os.path.normpath(ufo.path))
     _to_glyphs_features(
         self.font,
         ufo.features.text,
         glyph_names=ufo.keys(),
         glyphs_module=self.glyphs_module,
+        include_dir=include_dir,
+        expand_includes=self.expand_includes,
     )
 
+    # Store GDEF category data GSFont-wide to capture bracket glyphs that we
+    # create for UFOs and fold when going back.
+    opentype_categories = ufo.lib.get("public.openTypeCategories")
+    if opentype_categories is not None:
+        self.font.userData[ORIGINAL_CATEGORY_KEY] = opentype_categories
 
-def _to_glyphs_features(font, features_text, glyph_names=None, glyphs_module=None):
+
+def _to_glyphs_features(
+    font,
+    features_text,
+    glyph_names=None,
+    glyphs_module=None,
+    include_dir=None,
+    expand_includes=False,
+):
     """Import features text in GSFont, split into prefixes, features and classes.
 
     Args:
@@ -311,8 +392,15 @@ def _to_glyphs_features(font, features_text, glyph_names=None, glyphs_module=Non
         feature_text: str
         glyph_names: Optional[Sequence[str]]
         glyphs_module: Optional[Any]
+        include_dir: Optional[str]
+        expand_includes: bool
     """
-    document = FeaDocument(features_text, glyph_names)
+    document = FeaDocument(
+        features_text,
+        glyph_names,
+        include_dir=include_dir,
+        expand_includes=expand_includes,
+    )
     processor = FeatureFileProcessor(document, glyphs_module)
     processor.to_glyphs(font)
 
@@ -358,12 +446,20 @@ def _to_glyphs_features_basic(self):
 class FeaDocument:
     """Parse the string of a fea code into statements."""
 
-    def __init__(self, text, glyph_set=None):
+    def __init__(self, text, glyph_set=None, include_dir=None, expand_includes=False):
         feature_file = StringIO(text)
         glyph_names = glyph_set if glyph_set is not None else ()
         parser_ = parser.Parser(
-            feature_file, glyphNames=glyph_names, followIncludes=False
+            feature_file,
+            glyphNames=glyph_names,
+            includeDir=include_dir,
+            followIncludes=expand_includes,
         )
+        if expand_includes:
+            # if we expand includes, we need to reparse the whole file with the
+            # new content to get the updated locations
+            text = parser_.parse().asFea()
+            parser_ = parser.Parser(StringIO(text), glyphNames=glyph_names)
         self._doc = parser_.parse()
         self.statements = self._doc.statements
         self._lines = text.splitlines(True)  # keepends=True
@@ -454,30 +550,6 @@ class FeaDocument:
         line, char = self._previous_char(line, char)
 
         return None, line, char
-
-
-class PeekableIterator:
-    """Helper class to iterate and peek over a list."""
-
-    def __init__(self, list):
-        self.index = 0
-        self.list = list
-
-    def has_next(self, n=0):
-        return (self.index + n) < len(self.list)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        res = self.list[self.index]
-        self.index += 1
-        return res
-
-    next = __next__
-
-    def peek(self, n=0):
-        return self.list[self.index + n]
 
 
 class FeatureFileProcessor:
@@ -595,21 +667,30 @@ class FeatureFileProcessor:
             if st.glyphs.original:
                 for glyph in st.glyphs.original:
                     try:
-                        # Class name (GlyphClassName object)
-                        elements.append("@" + glyph.glyphclass.name)
+                        # Class name (MarkClassName object)
+                        elements.append("@" + glyph.markClass.name)
                     except AttributeError:
                         try:
-                            # Class name (GlyphClassDefinition object)
-                            # FIXME: (jany) why not always the same type?
-                            elements.append("@" + glyph.name)
+                            # Class name (GlyphClassName object)
+                            elements.append("@" + glyph.glyphclass.name)
                         except AttributeError:
-                            # Glyph name
-                            elements.append(glyph)
+                            try:
+                                # Class name (GlyphClassDefinition object)
+                                # FIXME: (jany) why not always the same type?
+                                elements.append("@" + glyph.name)
+                            except AttributeError:
+                                # Glyph name
+                                elements.append(glyph)
             else:
                 elements = st.glyphSet()
         except AttributeError:
             # Single class
-            elements.append("@" + st.glyphs.glyphclass.name)
+            try:
+                # Class name (MarkClassName object)
+                elements.append("@" + st.glyphs.markClass.name)
+            except AttributeError:
+                # Class name (GlyphClassName object)
+                elements.append("@" + st.glyphs.glyphclass.name)
         glyph_class.code = " ".join(elements)
         glyph_class.automatic = bool(automatic)
         self._font.classes.append(glyph_class)
@@ -629,6 +710,46 @@ class FeatureFileProcessor:
         feature = self.glyphs_module.GSFeature()
         feature.name = st.name
         feature.automatic = bool(automatic)
+        if feature.automatic:
+            # See if there is a feature names block in the code that should be
+            # written to the notes.
+            for i, statement in enumerate(contents):
+                if (
+                    isinstance(statement, ast.NestedBlock)
+                    and statement.block_name == "featureNames"
+                ):
+                    feature_names = contents[i]
+                    if feature_names.statements:
+                        # If there is only one name has default platformID,
+                        # platEncID and langID, write it using the simple
+                        # syntax. Otherwise write out the full featureNames
+                        # statement.
+                        if self._font.format_version == 2:
+                            name = feature_names.statements[0]
+                            if (
+                                len(feature_names.statements) == 1
+                                and name.platformID == 3
+                                and name.platEncID == 1
+                                and name.langID == 0x409
+                            ):
+                                name_text = f"Name: {name.string}"
+                            else:
+                                name_text = str(feature_names)
+                            notes_text = name_text + "\n" + notes_text
+                            notes = True
+                            contents.pop(i)
+                        elif self._font.format_version == 3:
+                            labels = []
+                            for name in feature_names.statements:
+                                if name.platformID == 3 and name.platEncID == 1:
+                                    language = _to_glyphs_language(name.langID)
+                                    labels.append(
+                                        dict(language=language, value=name.string)
+                                    )
+                            if len(labels) == len(feature_names.statements):
+                                feature.labels = labels
+                                contents.pop(i)
+                    break
         if notes:
             feature.notes = notes_text
         if disabled:

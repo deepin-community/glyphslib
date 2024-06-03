@@ -110,3 +110,148 @@ def test_reencode_glyphs(tmpdir):
     assert ufos[1]["A"].unicode is None
     assert ufos[1]["A.alt"].unicode == 0x0041
     assert ufos[1]["C"].unicode is None
+
+
+def test_glyphs3_names():
+    file = "InstanceFamilyName-G3.glyphs"
+    font = glyphsLib.GSFont(os.path.join(DATA, file))
+
+    expected_names = {
+        "familyName": [
+            "MyFamily",
+            "MyFamily",
+            "MyFamily 12pt",
+            "MyFamily 12pt",
+            "MyFamily 72pt",
+            "MyFamily 72pt",
+        ],
+        "preferredFamily": [
+            "MyFamily",
+            "MyFamily",
+            "MyFamily",
+            "Typographic MyFamily 12pt",
+            "MyFamily",
+            "MyFamily",
+        ],
+        "preferredFamilyName": [
+            None,
+            None,
+            None,
+            "Typographic MyFamily 12pt",
+            None,
+            None,
+        ],
+        "preferredSubfamilyName": [
+            None,
+            None,
+            None,
+            None,
+            None,
+            "Typographic Black",
+        ],
+        "windowsFamily": [
+            "MyFamily Thin",
+            "MyFamily Black",
+            "MyFamily 12pt Thin",
+            "MyFamily 12pt Black",
+            "MyFamily 72pt Thin",
+            "MyFamily 72pt Black",
+        ],
+        "fontName": [
+            "MyFamily-Thin",
+            "MyFamily-Black",
+            "MyFamily12pt-Thin",
+            "MyFamily12pt-Black",
+            "MyFamily72pt-Thin",
+            "MyFamily72pt-Black",
+        ],
+        "fullName": [
+            "MyFamily Thin",
+            "MyFamily Black",
+            "MyFamily 12pt Thin",
+            "MyFamily 12pt Black",
+            "MyFamily 72pt Thin",
+            "MyFamily 72pt Black",
+        ],
+    }
+
+    for name, expected in expected_names.items():
+        actual = [getattr(instance, name) for instance in font.instances]
+        assert expected == actual, name
+
+
+def test_glyphs3_mapping():
+    font = glyphsLib.GSFont(os.path.join(DATA, "Glyphs3Instances.glyphs"))
+    # Instance1: designspace 200 -> userspace 400
+    # Instance2: designspace 800 -> userspace 900
+    # Instance2: designspace 600 -> userspace 650
+    doc = glyphsLib.to_designspace(font)
+    assert doc.axes[0].map == [(400, 200), (600, 650), (900, 800)]
+    assert doc.instances[0].location == {"Weight": 200}
+    assert doc.instances[1].location == {"Weight": 800}
+    assert doc.instances[2].location == {"Weight": 650}
+
+
+def test_glyphs3_instance_filtering():
+    font = glyphsLib.GSFont(os.path.join(DATA, "InstanceFamilyName-G3.glyphs"))
+    assert len(font.instances) == 6
+
+    # Loaded from default font family name
+    assert not font.instances[0].properties
+    assert not font.instances[1].properties
+    assert font.instances[0].familyName == "MyFamily"
+    assert font.instances[1].familyName == "MyFamily"
+
+    # Loaded from .properties
+    assert font.instances[2].familyName == "MyFamily 12pt"
+    assert font.instances[3].familyName == "MyFamily 12pt"
+    assert font.instances[4].familyName == "MyFamily 72pt"
+    assert font.instances[5].familyName == "MyFamily 72pt"
+
+    doc = glyphsLib.to_designspace(font)
+    assert len(doc.instances) == 6
+
+    doc = glyphsLib.to_designspace(font, family_name="MyFamily 12pt")
+    assert len(doc.instances) == 2
+
+
+def test_glyphs3_instance_properties(tmpdir):
+    expected_num_properties = [0, 0, 1, 2, 1, 2]
+
+    file = "InstanceFamilyName-G3.glyphs"
+    font = glyphsLib.GSFont(os.path.join(DATA, file))
+
+    for expected, instance in zip(expected_num_properties, font.instances):
+        assert expected == len(instance.properties)
+
+    font.save(tmpdir / file)
+    font = glyphsLib.GSFont(tmpdir / file)
+
+    for expected, instance in zip(expected_num_properties, font.instances):
+        assert expected == len(instance.properties)
+
+
+def test_rename_glyphs(tmpdir):
+    font = glyphsLib.GSFont(os.path.join(DATA, "RenameGlyphsTest.glyphs"))
+    instance_dir = tmpdir.ensure_dir("instance_ufo")
+    designspace = glyphsLib.to_designspace(font, instance_dir=instance_dir)
+    path = str(tmpdir / (font.familyName + ".designspace"))
+    write_designspace_and_UFOs(designspace, path)
+
+    ufo_path = tmpdir / "RenameGlyphsTest-Regular.ufo"
+    ufo_path.copy(instance_dir.ensure_dir("RenameGlyphsTest-Straight.ufo"))
+    ufo_path.copy(instance_dir.ensure_dir("RenameGlyphsTest-Swapped.ufo"))
+
+    ufos = apply_instance_data(designspace.path)
+
+    assert len(ufos) == 2
+
+    assert len(ufos[0]["a"][0]) == 4  # Square
+    assert len(ufos[0]["b"][0]) == 12  # Circle
+    assert ufos[0]["a"].unicode == 0x0061
+    assert ufos[0]["b"].unicode == 0x0062
+
+    assert len(ufos[1]["a"][0]) == 12  # Circle
+    assert len(ufos[1]["b"][0]) == 4  # Square
+    assert ufos[0]["a"].unicode == 0x0061
+    assert ufos[0]["b"].unicode == 0x0062

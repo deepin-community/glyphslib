@@ -16,27 +16,38 @@
 import os
 import logging
 
+from fontTools.varLib.models import piecewiseLinearMap
+
 from glyphsLib.util import build_ufo_path
-from glyphsLib.classes import WEIGHT_CODES, GSCustomParameter
-from .constants import GLYPHS_PREFIX, GLYPHLIB_PREFIX, UFO_FILENAME_CUSTOM_PARAM
+from glyphsLib.classes import (
+    CustomParametersProxy,
+    GSCustomParameter,
+    InstanceType,
+    PropertiesProxy,
+    WEIGHT_CODES,
+)
+from .constants import (
+    UFO_FILENAME_CUSTOM_PARAM,
+    EXPORT_KEY,
+    WIDTH_KEY,
+    WEIGHT_KEY,
+    FULL_FILENAME_KEY,
+    MANUAL_INTERPOLATION_KEY,
+    INSTANCE_INTERPOLATIONS_KEY,
+    CUSTOM_PARAMETERS_KEY,
+    CUSTOM_PARAMETERS_BLACKLIST,
+    PROPERTIES_KEY,
+    PROPERTIES_WHITELIST,
+)
 from .names import build_stylemap_names
 from .axes import (
     get_axis_definitions,
     is_instance_active,
-    interp,
     WEIGHT_AXIS_DEF,
     WIDTH_AXIS_DEF,
     AxisDefinitionFactory,
 )
 from .custom_params import to_ufo_custom_params
-
-EXPORT_KEY = GLYPHS_PREFIX + "export"
-WIDTH_KEY = GLYPHS_PREFIX + "width"
-WEIGHT_KEY = GLYPHS_PREFIX + "weight"
-FULL_FILENAME_KEY = GLYPHLIB_PREFIX + "fullFilename"
-MANUAL_INTERPOLATION_KEY = GLYPHS_PREFIX + "manualInterpolation"
-INSTANCE_INTERPOLATIONS_KEY = GLYPHS_PREFIX + "intanceInterpolations"
-CUSTOM_PARAMETERS_KEY = GLYPHS_PREFIX + "customParameters"
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +56,8 @@ logger = logging.getLogger(__name__)
 def to_designspace_instances(self):
     """Write instance data from self.font to self.designspace."""
     for instance in self.font.instances:
+        if instance.type == InstanceType.VARIABLE:
+            continue
         if self.minimize_glyphs_diffs or (
             is_instance_active(instance)
             and _is_instance_included_in_family(self, instance)
@@ -54,38 +67,18 @@ def to_designspace_instances(self):
 
 def _to_designspace_instance(self, instance):
     ufo_instance = self.designspace.newInstanceDescriptor()
+
     # FIXME: (jany) most of these customParameters are actually attributes,
     # at least according to https://docu.glyphsapp.com/#fontName
-    for p in instance.customParameters:
-        param, value = p.name, p.value
-        if param == "familyName":
-            ufo_instance.familyName = value
-        elif param == "postscriptFontName":
-            # Glyphs uses "postscriptFontName", not "postScriptFontName"
-            ufo_instance.postScriptFontName = value
-        elif param == "fileName":
-            fname = value + ".ufo"
-            if self.instance_dir is not None:
-                fname = self.instance_dir + "/" + fname
-            ufo_instance.filename = fname
 
-    if ufo_instance.familyName is None:
-        ufo_instance.familyName = self.family_name
+    # Read either from properties or custom parameters or the font
+    ufo_instance.familyName = instance.familyName
     ufo_instance.styleName = instance.name
-
-    fname = (
-        instance.customParameters[UFO_FILENAME_CUSTOM_PARAM]
-        or instance.customParameters[FULL_FILENAME_KEY]
+    ufo_instance.postScriptFontName = (
+        instance.properties.get("postscriptFontName")
+        or instance.customParameters["postscriptFontName"]
     )
-    if fname is not None:
-        if self.instance_dir:
-            fname = self.instance_dir + "/" + os.path.basename(fname)
-        ufo_instance.filename = fname
-    if not ufo_instance.filename:
-        instance_dir = self.instance_dir or "instance_ufos"
-        ufo_instance.filename = build_ufo_path(
-            instance_dir, ufo_instance.familyName, ufo_instance.styleName
-        )
+    ufo_instance.filename = _to_filename(self, instance, ufo_instance)
 
     designspace_axis_tags = {a.tag for a in self.designspace.axes}
     location = {}
@@ -122,32 +115,56 @@ def _to_designspace_instance(self, instance):
         ufo_instance.lib[INSTANCE_INTERPOLATIONS_KEY] = instance.instanceInterpolations
         ufo_instance.lib[MANUAL_INTERPOLATION_KEY] = instance.manualInterpolation
 
-    # Strategy: dump all custom parameters into the InstanceDescriptor.
-    # Later, when using `apply_instance_data`, we will dig out those custom
-    # parameters using `InstanceDescriptorAsGSInstance` and apply them to the
-    # instance UFO with `to_ufo_custom_params`.
-    # NOTE: customParameters are not a dict! One key can have several values
-    params = []
-    for p in instance.customParameters:
-        if p.name in (
-            "familyName",
-            "postscriptFontName",
-            "fileName",
-            FULL_FILENAME_KEY,
-            UFO_FILENAME_CUSTOM_PARAM,
-        ):
-            # These will be stored in the official descriptor attributes
-            continue
-        if p.name in ("weightClass", "widthClass"):
-            # No need to store these ones because we can recover them by
-            # reading the mapping backward, because the mapping is built from
-            # where the instances are.
-            continue
-        params.append((p.name, p.value))
-    if params:
-        ufo_instance.lib[CUSTOM_PARAMETERS_KEY] = params
+    # Dump selected custom parameters and properties into the instance
+    # descriptor. Later, when using `apply_instance_data`, we will dig out those
+    # custom parameters and apply them to the UFO instance.
+    parameters = _to_custom_parameters(instance)
+    if parameters:
+        ufo_instance.lib[CUSTOM_PARAMETERS_KEY] = parameters
+    properties = _to_properties(instance)
+    if properties:
+        ufo_instance.lib[PROPERTIES_KEY] = properties
 
     self.designspace.addInstance(ufo_instance)
+
+
+def _to_custom_parameters(instance):
+    return [
+        (item.name, item.value)
+        for item in instance.customParameters
+        if item.name not in CUSTOM_PARAMETERS_BLACKLIST
+    ]
+
+
+def _to_filename(self, instance, ufo_instance):
+    filename = (
+        instance.customParameters[UFO_FILENAME_CUSTOM_PARAM]
+        or instance.customParameters[FULL_FILENAME_KEY]
+    )
+    if filename:
+        if self.instance_dir:
+            filename = os.path.basename(filename)
+            filename = os.path.join(self.instance_dir, filename)
+        return filename
+    filename = instance.customParameters["fileName"]
+    if filename:
+        filename = f"{filename}.ufo"
+        if self.instance_dir:
+            filename = os.path.join(self.instance_dir, filename)
+        return filename
+    return build_ufo_path(
+        self.instance_dir or "instance_ufos",
+        ufo_instance.familyName,
+        ufo_instance.styleName,
+    )
+
+
+def _to_properties(instance):
+    return [
+        (item.name, item.value)
+        for item in instance.properties
+        if item.name in PROPERTIES_WHITELIST
+    ]
 
 
 def _is_instance_included_in_family(self, instance):
@@ -190,8 +207,8 @@ def to_glyphs_instances(self):  # noqa: C901
                     if axis.tag == axis_def.tag:
                         mapping = axis.map
                 if mapping:
-                    reverse_mapping = [(dl, ul) for ul, dl in mapping]
-                    user_loc = interp(reverse_mapping, design_loc)
+                    reverse_mapping = {dl: ul for ul, dl in mapping}
+                    user_loc = piecewiseLinearMap(design_loc, reverse_mapping)
                 if user_loc is not None:
                     axis_def.set_user_loc(instance, user_loc)
 
@@ -274,12 +291,14 @@ class InstanceDescriptorAsGSInstance:
     def __init__(self, descriptor):
         self._descriptor = descriptor
 
-        # Having a simple list is enough because `to_ufo_custom_params` does
-        # not use the fake dictionary interface.
-        self.customParameters = []
+        self.customParameters = CustomParametersProxy(None)
         if CUSTOM_PARAMETERS_KEY in descriptor.lib:
             for name, value in descriptor.lib[CUSTOM_PARAMETERS_KEY]:
-                self.customParameters.append(GSCustomParameter(name, value))
+                self.customParameters[name] = value
+        self.properties = PropertiesProxy(None)
+        if PROPERTIES_KEY in descriptor.lib:
+            for name, value in descriptor.lib[PROPERTIES_KEY]:
+                self.properties[name] = value
 
 
 def _set_class_from_instance(ufo, designspace, instance, axis_tag):
@@ -305,8 +324,8 @@ def _set_class_from_instance(ufo, designspace, instance, axis_tag):
         if mapping:
             # Retrieve the user location (weightClass/widthClass)
             # by going through the axis mapping in reverse.
-            reverse_mapping = sorted({dl: ul for ul, dl in mapping}.items())
-            user_loc = interp(reverse_mapping, design_loc)
+            reverse_mapping = {dl: ul for ul, dl in mapping}
+            user_loc = piecewiseLinearMap(design_loc, reverse_mapping)
         else:
             # no mapping means user space location is same as design space
             user_loc = design_loc
@@ -314,14 +333,14 @@ def _set_class_from_instance(ufo, designspace, instance, axis_tag):
 
 
 def set_weight_class(ufo, designspace, instance):
-    """ Set ufo.info.openTypeOS2WeightClass according to the user location
+    """Set ufo.info.openTypeOS2WeightClass according to the user location
     of the designspace instance, as calculated from the axis mapping.
     """
     _set_class_from_instance(ufo, designspace, instance, "wght")
 
 
 def set_width_class(ufo, designspace, instance):
-    """ Set ufo.info.openTypeOS2WidthClass according to the user location
+    """Set ufo.info.openTypeOS2WidthClass according to the user location
     of the designspace instance, as calculated from the axis mapping.
     """
     _set_class_from_instance(ufo, designspace, instance, "wdth")

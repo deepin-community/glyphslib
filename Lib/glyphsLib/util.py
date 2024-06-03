@@ -123,3 +123,56 @@ def tostr(s, encoding="ascii", errors="strict"):
         return s.decode(encoding, errors)
     else:
         return s
+
+
+def pairs(list):
+    "s -> (s0,s1), (s2,s3), (s4, s5), ..."
+    return [list[i : i + 2] for i in range(0, len(list), 2)]
+
+
+def freezedict(dct):
+    return frozenset(dct.items())
+
+
+class LoggerMixin:
+    _logger = None
+
+    @property
+    def logger(self):
+        if self._logger is None:
+            self._logger = logging.getLogger(
+                ".".join([self.__class__.__module__, self.__class__.__name__])
+            )
+        return self._logger
+
+
+def designspace_min_max(axis):
+    """Return the minimum/maximum of an axis in designspace coordinates"""
+    if not axis.map:
+        return axis.minimum, axis.maximum
+    designspace_scale = [design_location for _, design_location in axis.map]
+    return min(designspace_scale), max(designspace_scale)
+
+
+class PeekableIterator:
+    """Helper class to iterate and peek over a list."""
+
+    def __init__(self, list):
+        self.index = 0
+        self.list = list
+
+    def has_next(self, n=0):
+        return (self.index + n) < len(self.list)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        res = self.list[self.index]
+        self.index += 1
+        return res
+
+    next = __next__
+
+    def peek(self, n=0):
+        return self.list[self.index + n]
