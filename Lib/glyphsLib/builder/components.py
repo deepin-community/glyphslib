@@ -20,7 +20,8 @@ from fontTools.pens.recordingPen import DecomposingRecordingPen
 from glyphsLib.classes import GSBackgroundLayer
 from glyphsLib.types import Transform
 
-from .constants import GLYPHS_PREFIX, COMPONENT_INFO_KEY
+from .smart_components import to_ufo_smart_component
+from .constants import GLYPHS_PREFIX, COMPONENT_INFO_KEY, SMART_COMPONENT_AXES_LIB_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,38 @@ def to_ufo_components(self, ufo_glyph, layer):
             f"Glyph '{ufo_glyph.name}': All components of the background layer of "
             f"'{layer.foreground.name}' will be decomposed."
         )
-        to_ufo_components_background_decompose(self, ufo_glyph, layer)
+        to_ufo_components_nonmaster_decompose(self, ufo_glyph, layer)
         return
 
     pen = ufo_glyph.getPointPen()
     for index, component in enumerate(layer.components):
-        pen.addComponent(component.name, component.transform)
+        component_name = component.name
+        if layer._is_color_palette_layer():
+            # Glyphs handles components for color layers in a special way. If
+            # the component glyph has color layers of its own, the component
+            # use the first color layer with the same color index, otherwise it
+            # fallback to the default layer. We try to do that here as well.
+            font = layer.parent.parent
+            component_glyph = font.glyphs[component_name]
+            color_layers = [
+                l for l in component_glyph.layers if l._is_color_palette_layer()
+            ]
+            for i, l in enumerate(color_layers):
+                if l._color_palette_index() == layer._color_palette_index():
+                    if l.layerId != l.associatedMasterId:
+                        # If it is not a master layer, we rename it in
+                        # _to_ufo_color_palette_layers(), so we reference the
+                        # same name here.
+                        component_name += f".color{i}"
+                    break
+        # XXX We may also want to test here if we're compiling a font (and decompose
+        # if so) or changing the representation format (in which case we leave it
+        # as a component and save the smart component values).
+        # See https://github.com/googlefonts/glyphsLib/pull/822
+        if component.smartComponentValues and component.component.smartComponentAxes:
+            to_ufo_smart_component(self, layer, component, pen)
+        else:
+            pen.addComponent(component_name, component.transform)
 
         if not (component.anchor or component.alignment):
             continue
@@ -71,12 +98,16 @@ def to_ufo_components(self, ufo_glyph, layer):
             ufo_glyph.lib[_lib_key(key)] = values
 
 
-def to_ufo_components_background_decompose(self, ufo_glyph, layer):
-    """Draw decomposed .glyphs background components with a pen, adding them to
-    the parent glyph."""
+def to_ufo_components_nonmaster_decompose(self, ufo_glyph, layer):
+    """Draw decomposed .glyphs background and non-master layers with a pen,
+    adding them to the parent glyph."""
 
-    layer_id = layer.foreground.layerId
-    layer_master_id = layer.foreground.associatedMasterId
+    if isinstance(layer, GSBackgroundLayer):
+        layer_id = layer.foreground.layerId
+        layer_master_id = layer.foreground.associatedMasterId
+    else:
+        layer_id = layer.layerId
+        layer_master_id = layer.associatedMasterId
 
     if layer_id in self._glyph_sets:
         layers = self._glyph_sets[layer_id]
@@ -201,7 +232,7 @@ def to_ufo_smart_component_axes(self, ufo_glyph, glyph):
         }
 
     if glyph.smartComponentAxes:
-        ufo_glyph.lib[AXES_LIB_KEY] = [
+        ufo_glyph.lib[SMART_COMPONENT_AXES_LIB_KEY] = [
             _to_ufo_axis(a) for a in glyph.smartComponentAxes
         ]
 
@@ -216,7 +247,7 @@ def to_glyphs_smart_component_axes(self, ufo_glyph, glyph):
         res.topName = axis["topName"]
         return res
 
-    if AXES_LIB_KEY in ufo_glyph.lib:
+    if SMART_COMPONENT_AXES_LIB_KEY in ufo_glyph.lib:
         glyph.smartComponentAxes = [
-            _to_glyphs_axis(a) for a in ufo_glyph.lib[AXES_LIB_KEY]
+            _to_glyphs_axis(a) for a in ufo_glyph.lib[SMART_COMPONENT_AXES_LIB_KEY]
         ]

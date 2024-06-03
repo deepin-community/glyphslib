@@ -20,7 +20,7 @@ import pytest
 
 from fontTools import designspaceLib
 from glyphsLib import to_glyphs, to_designspace, to_ufos
-from glyphsLib.classes import GSFont, GSFontMaster
+from glyphsLib.classes import GSFont, GSFontMaster, GSAxis, GSInstance
 from glyphsLib.builder.axes import _is_subset_of_default_axes, get_regular_master
 
 """
@@ -61,7 +61,7 @@ def test_weight_width_custom(axes, ufo_module):
 
     font = to_glyphs(doc)
 
-    if _is_subset_of_default_axes([{"Name": n, "Tag": t} for t, n in axes]):
+    if _is_subset_of_default_axes([GSAxis(name=n, tag=t) for t, n in axes]):
         assert font.customParameters["Axes"] is None
     else:
         assert font.customParameters["Axes"] == [
@@ -226,6 +226,255 @@ def test_mapping_is_same_regardless_of_axes_custom_parameter(ufo_module):
     assert doc.axes[0].minimum == 200
     assert doc.axes[0].maximum == 700
     assert doc.axes[0].map == []
+
+
+def test_mapping_using_axis_location_custom_parameter_on_instances(ufo_module):
+    # https://github.com/googlefonts/glyphsLib/issues/714
+    # https://github.com/googlefonts/glyphsLib/pull/810
+
+    font = to_glyphs(
+        [ufo_module.Font(), ufo_module.Font(), ufo_module.Font(), ufo_module.Font()]
+    )
+
+    origin_id = "95FB0C11-C828-4064-8966-34220AA4D426"
+    font.customParameters["Axes"] = [
+        {"Name": "Weight", "Tag": "wght"},
+        {"Name": "Width", "Tag": "wdth"},
+    ]
+
+    # Add masters
+
+    font.masters[0].name = "Regular"
+    font.masters[0].id = origin_id
+    font.masters[0].weightValue = 72
+    font.masters[0].widthValue = 448
+    font.masters[0].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.masters[1].name = "Bold"
+    font.masters[1].weightValue = 112
+    font.masters[1].widthValue = 448
+    font.masters[1].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 700},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.masters[2].name = "Thin"
+    font.masters[2].weightValue = 48
+    font.masters[2].widthValue = 448
+    font.masters[2].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 200},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.masters[3].name = "Cd Regular"
+    font.masters[3].weightValue = 72
+    font.masters[3].widthValue = 224
+    font.masters[3].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 50},
+    ]
+
+    font.customParameters["Variable Font Origin"] = origin_id
+
+    # Add some instances with mappings
+
+    font.instances = [
+        GSInstance(),
+        GSInstance(),
+        GSInstance(),
+        GSInstance(),
+        GSInstance(),
+        GSInstance(),
+    ]
+
+    font.instances[0].name = "Thin"
+    font.instances[0].weightValue = 48
+    font.instances[0].widthValue = 448
+    font.instances[0].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 200},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.instances[1].name = "Light"
+    font.instances[1].weightValue = 62
+    font.instances[1].widthValue = 448
+    font.instances[1].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 300},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.instances[2].name = "Regular"
+    font.instances[2].weightValue = 72
+    font.instances[2].widthValue = 448
+    font.instances[2].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.instances[3].name = "Medium"
+    font.instances[3].weightValue = 92
+    font.instances[3].widthValue = 448
+    font.instances[3].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 600},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.instances[4].name = "Cd Regular"
+    font.instances[4].weightValue = 72
+    font.instances[4].widthValue = 224
+    font.instances[4].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 50},
+    ]
+    font.instances[5].name = "SCd Regular"
+    font.instances[5].weightValue = 72
+    font.instances[5].widthValue = 384
+    font.instances[5].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 60},
+    ]
+
+    doc = to_designspace(font, ufo_module=ufo_module)
+    assert doc.axes[0].minimum == 200
+    assert doc.axes[0].default == 400
+    assert doc.axes[0].maximum == 700
+    assert doc.axes[0].map == [(200, 48), (300, 62), (400, 72), (600, 92), (700, 112)]
+
+    assert doc.axes[1].minimum == 50
+    assert doc.axes[1].default == 100
+    assert doc.axes[1].maximum == 100
+    assert doc.axes[1].map == [(50, 224), (60, 384), (100, 448)]
+
+
+def test_mapping_using_axis_location_cp_on_masters_none(ufo_module):
+    # https://github.com/googlefonts/glyphsLib/issues/714
+    # https://github.com/googlefonts/glyphsLib/pull/810
+
+    # When masters have no or disabled Axis Location CP, the ones on the
+    # instances should still be evaluated.
+
+    font = to_glyphs(
+        [ufo_module.Font(), ufo_module.Font(), ufo_module.Font(), ufo_module.Font()]
+    )
+
+    font.customParameters["Axes"] = [
+        {"Name": "Weight", "Tag": "wght"},
+        {"Name": "Width", "Tag": "wdth"},
+    ]
+
+    # Add masters
+
+    font.masters[0].name = "Regular"
+    font.masters[0].weightValue = 72
+    font.masters[0].widthValue = 448
+
+    font.masters[1].name = "Bold"
+    font.masters[1].weightValue = 112
+    font.masters[1].widthValue = 448
+
+    font.masters[2].name = "Thin"
+    font.masters[2].weightValue = 48
+    font.masters[2].widthValue = 448
+
+    font.masters[3].name = "Cd Regular"
+    font.masters[3].weightValue = 72
+    font.masters[3].widthValue = 224
+
+    font.instances = [GSInstance(), GSInstance(), GSInstance()]
+
+    font.instances[0].name = "Regular"
+    font.instances[0].weightValue = 72
+    font.instances[0].widthValue = 448
+    font.instances[0].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.instances[1].name = "SCd Regular"
+    font.instances[1].weightValue = 72
+    font.instances[1].widthValue = 384
+    font.instances[1].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 60},
+    ]
+    font.instances[2].name = "Cd Regular"
+    font.instances[2].weightValue = 72
+    font.instances[2].widthValue = 224
+    font.instances[2].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 50},
+    ]
+
+    doc = to_designspace(font, ufo_module=ufo_module)
+    assert doc.axes[0].minimum == 400
+    assert doc.axes[0].default == 400
+    assert doc.axes[0].maximum == 400
+    assert doc.axes[0].map == [(400, 72)]
+
+    assert doc.axes[1].minimum == 50
+    assert doc.axes[1].default == 100
+    assert doc.axes[1].maximum == 100
+    assert doc.axes[1].map == [(50, 224), (60, 384), (100, 448)]
+
+
+def test_mapping_using_axis_location_cp_on_instances_none(ufo_module):
+    # https://github.com/googlefonts/glyphsLib/issues/714
+    # https://github.com/googlefonts/glyphsLib/pull/810
+
+    # When all masters have Axis Location CP, non-"Axis Location" instance
+    # mappings should be ignored.
+
+    font = to_glyphs(
+        [ufo_module.Font(), ufo_module.Font(), ufo_module.Font(), ufo_module.Font()]
+    )
+
+    font.customParameters["Axes"] = [
+        {"Name": "Weight", "Tag": "wght"},
+        {"Name": "Width", "Tag": "wdth"},
+    ]
+
+    # Add masters
+
+    font.masters[0].name = "Regular"
+    font.masters[0].weightValue = 72
+    font.masters[0].widthValue = 448
+    font.masters[0].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.masters[1].name = "Bold"
+    font.masters[1].weightValue = 112
+    font.masters[1].widthValue = 448
+    font.masters[1].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 700},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.masters[2].name = "Thin"
+    font.masters[2].weightValue = 48
+    font.masters[2].widthValue = 448
+    font.masters[2].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 200},
+        {"Axis": "Width", "Location": 100},
+    ]
+    font.masters[3].name = "Cd Regular"
+    font.masters[3].weightValue = 72
+    font.masters[3].widthValue = 224
+    font.masters[3].customParameters["Axis Location"] = [
+        {"Axis": "Weight", "Location": 400},
+        {"Axis": "Width", "Location": 50},
+    ]
+
+    font.instances = [GSInstance()]
+
+    font.instances[0].name = "SCd Regular"
+    font.instances[0].weightValue = 72
+    font.instances[0].widthValue = 384
+
+    doc = to_designspace(font, ufo_module=ufo_module)
+    assert doc.axes[0].minimum == 200
+    assert doc.axes[0].default == 400
+    assert doc.axes[0].maximum == 700
+    assert doc.axes[0].map == [(200, 48), (400, 72), (700, 112)]
+
+    assert doc.axes[1].minimum == 50
+    assert doc.axes[1].default == 100
+    assert doc.axes[1].maximum == 100
+    assert doc.axes[1].map == [(50, 224), (100, 448)]
 
 
 def test_custom_parameter_vfo_current():
@@ -415,3 +664,19 @@ def test_axis_with_no_mapping_does_not_error_in_roundtrip_with_2_axes(ufo_module
 
     assert doc_rt.axes[0].serialize() == doc.axes[0].serialize()
     assert doc_rt.axes[1].serialize() == doc.axes[1].serialize()
+
+
+def test_variable_instance(ufo_module):
+    """Glyphs 3 introduced a so-called "variable" instance which is a
+    pseudo-instance that holds various VF settings.
+    This messed with the instance_mapping creation as it would overwrite the designLoc
+    of a default instance of an axis back to 0.
+    """
+    source_path = os.path.join("tests", "data", "VariableInstance.glyphs")
+    font = GSFont(source_path)
+    assert len(font.instances) == 28  # Including the VF setting
+    doc = to_designspace(font)
+
+    assert doc.axes[0].map[2] == (400, 80)
+    assert doc.axes[0].default == 400
+    assert len(doc.instances) == 27  # The VF setting should not be in the DS

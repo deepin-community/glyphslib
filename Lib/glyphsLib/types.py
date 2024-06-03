@@ -13,25 +13,29 @@
 # limitations under the License.
 
 
-import re
-import datetime
-import copy
 import binascii
+import copy
+import datetime
+import re
+from typing import List
+from typing import Optional
+from typing import Union
 
 __all__ = [
-    "Transform",
+    "BinaryData",
+    "IndexPath",
     "Point",
     "Rect",
     "Size",
+    "Transform",
+    "UnicodesList",
     "ValueType",
-    "parse_datetime",
-    "parse_color",
     "floatToString3",
     "floatToString5",
-    "readIntlist",
-    "UnicodesList",
-    "BinaryData",
+    "parse_color",
+    "parse_datetime",
     "parse_float_or_int",
+    "readIntlist",
 ]
 
 
@@ -62,7 +66,7 @@ class ValueType:
         """Return a typed value representing the structured glyphs strings."""
         raise NotImplementedError("%s read" % type(self).__name__)
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         """Return structured glyphs strings representing the typed value."""
         raise NotImplementedError("%s write" % type(self).__name__)
 
@@ -86,7 +90,7 @@ def Vector(dim):
 
         dimension = dim
         default = [0.0] * dimension
-        regex = re.compile("{%s}" % ", ".join(["([-.e\\d]+)"] * dimension))
+        regex = re.compile("[({]%s[})]" % ", ".join(["([-.e\\d]+)"] * dimension))
 
         def fromString(self, src):
             if isinstance(src, list):
@@ -95,9 +99,12 @@ def Vector(dim):
             src = src.replace('"', "")
             return [parse_float_or_int(i) for i in self.regex.match(src).groups()]
 
-        def plistValue(self):
+        def plistValue(self, format_version=2):
             assert isinstance(self.value, list) and len(self.value) == self.dimension
-            return '"{%s}"' % (", ".join(floatToString3(v) for v in self.value))
+            if format_version == 2:
+                return '"{%s}"' % (", ".join(floatToString3(v) for v in self.value))
+            else:
+                return "(%s)" % (",".join(floatToString3(v) for v in self.value))
 
         def __getitem__(self, key):
             assert isinstance(self.value, list) and len(self.value) == self.dimension
@@ -200,9 +207,13 @@ class Rect(Vector(4)):
             value = [value[0], value[1], value2[0], value2[1]]
         super().__init__(value)
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         assert isinstance(self.value, list) and len(self.value) == self.dimension
-        return '"{{%s, %s}, {%s, %s}}"' % tuple(floatToString3(v) for v in self.value)
+        if format_version == 2:
+            return '"{{%s, %s}, {%s, %s}}"' % tuple(
+                floatToString3(v) for v in self.value
+            )
+        return "(" + ",".join(map(floatToString3, self.value)) + ")"
 
     def __repr__(self):
         return "<rect origin={} size={}>".format(str(self.origin), str(self.size))
@@ -245,9 +256,13 @@ class Transform(Vector(6)):
     def __repr__(self):
         return "<affine transformation %s>" % (" ".join(map(str, self.value)))
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         assert isinstance(self.value, list) and len(self.value) == self.dimension
         return '"{%s}"' % (", ".join(floatToString5(v) for v in self.value))
+
+    def determinant(self):
+        a, b, c, d = self[:4]
+        return a * d - b * c
 
 
 UTC_OFFSET_RE = re.compile(r".* (?P<sign>[+-])(?P<hours>\d\d)(?P<minutes>\d\d)$")
@@ -284,7 +299,7 @@ class Datetime(ValueType):
     def fromString(self, src):
         return parse_datetime(src)
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         return '"%s +0000"' % self.value
 
     def strftime(self, val):
@@ -330,7 +345,7 @@ class Color(ValueType):
     def __repr__(self):
         return self.value.__repr__()
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         return str(self.value)
 
 
@@ -380,12 +395,17 @@ class UnicodesList(list):
             unicodes = [str(v) for v in value]
         super().__init__(unicodes)
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         if not self:
             return None
         if len(self) == 1:
+            if format_version == 3:
+                return str(int(self[0], 16))
             return self[0]
-        return '"%s"' % ",".join(self)
+        if format_version == 2:
+            return '"%s"' % ",".join(self)
+        else:
+            return "(%s)" % ",".join([str(int(x, 16)) for x in self])
 
 
 class BinaryData(bytes):
@@ -393,7 +413,62 @@ class BinaryData(bytes):
     def fromHex(cls, data):
         return cls(binascii.unhexlify(data))
 
-    def plistValue(self):
+    def plistValue(self, format_version=2):
         # TODO write hex bytes in chunks and split over multiple lines
         # for better readability, like the fonttools xmlWriter does
         return "<%s>" % binascii.hexlify(self).decode()
+
+
+class IndexPath(ValueType):
+    """A list of indexes.
+
+    It is analogous to `NSIndexPath`, which is a list of indices that together
+    represent the path to a specific location in a tree of nested arrays. This
+    class is used internally by Glyphs for storing properties of hints,
+    including `origin`, `other1`, `other2`, and `target`.
+
+    The most common case is that it is a list of two integers pointing at a real
+    node. However, it can also be three or four integers. Moreover, in the case
+    of `origin` and `target`, it can be a list containing a single string.
+    """
+
+    def __init__(
+        self,
+        value: Union[int, str, List[Union[int, str]]],
+        value2: Optional[int] = None,
+        value3: Optional[int] = None,
+        value4: Optional[int] = None,
+    ):
+        if value4 is not None:
+            self.value = [value, value2, value3, value4]
+        elif value3 is not None:
+            self.value = [value, value2, value3]
+        elif value2 is not None:
+            self.value = [value, value2]
+        elif isinstance(value, (list, tuple)):
+            self.value = value
+        else:
+            self.value = self.fromString(value)
+
+    def fromString(self, string: str) -> List[Union[int, str]]:
+        values = string.strip().lstrip('"{(').rstrip(')}"').split(",")
+        return [
+            (int(value) if value.isdigit() else value)
+            for value in map(str.strip, values)
+        ]
+
+    def plistValue(self, format_version: int = 2) -> str:
+        if len(self.value) == 1:
+            return self.value[0]
+        if format_version == 2:
+            return '"{' + ", ".join(map(str, self.value)) + '}"'
+        return "(" + ",".join(map(str, self.value)) + ")"
+
+    def __getitem__(self, key: int) -> Union[int, str]:
+        return self.value[key]
+
+    def __setitem__(self, key: int, value: Union[int, str]) -> None:
+        self.value[key] = value
+
+    def __len__(self) -> int:
+        return len(self.value)

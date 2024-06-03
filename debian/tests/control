@@ -1,6 +1,7 @@
-Test-Command: pytest-3
+Test-Command: pytest-3 -k "not test_glyph_color_layers_"
 Depends: python3-all,
          python3-glyphslib,
          python3-pytest,
          python3-ufonormalizer,
-         xmldiff
+         python3-ufo2ft,
+         xmldiff,

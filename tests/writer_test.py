@@ -14,31 +14,29 @@
 # limitations under the License.
 
 import unittest
+from collections import OrderedDict
 from io import StringIO
 from textwrap import dedent
-from collections import OrderedDict
-import os
 
 from glyphsLib import classes
 from glyphsLib.types import parse_datetime, Point, Rect
 from glyphsLib.writer import dump, dumps
-from glyphsLib.parser import Parser
 
 from . import test_helpers
 
 
 class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
-    def assertWrites(self, glyphs_object, text):
+    def assertWrites(self, glyphs_object, text, format_version=2):
         """Assert that the given object, when given to the writer,
         produces the given text.
         """
         expected = text.splitlines()
-        actual = test_helpers.write_to_lines(glyphs_object)
+        actual = test_helpers.write_to_lines(glyphs_object, format_version)
         self.assertLinesEqual(
             expected, actual, "The writer has not produced the expected output"
         )
 
-    def assertWritesValue(self, glyphs_value, text):
+    def assertWritesValue(self, glyphs_value, text, format_version=2):
         """Assert that the writer produces the given text for the given value."""
         expected = (
             dedent(
@@ -52,7 +50,9 @@ class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
             .splitlines()
         )
         # We wrap the value in a dict to use the same test helper
-        actual = test_helpers.write_to_lines({"writtenValue": glyphs_value})
+        actual = test_helpers.write_to_lines(
+            {"writtenValue": glyphs_value}, format_version
+        )
         self.assertLinesEqual(
             expected, actual, "The writer has not produced the expected output"
         )
@@ -301,7 +301,7 @@ class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
         # blueValues: not handled because it is read-only
         # otherBlues: not handled because it is read-only
         # guides
-        guide = classes.GSGuideLine()
+        guide = classes.GSGuide()
         guide.name = "middle"
         master.guides.append(guide)
         # userData
@@ -677,9 +677,9 @@ class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
             leftKerningGroup = A;
             leftMetricsKey = A;
             widthMetricsKey = A;
-            note = "Stunning one-bedroom A with renovated acute accent";
             rightKerningGroup = A;
             rightMetricsKey = A;
+            note = "Stunning one-bedroom A with renovated acute accent";
             unicode = 00C1;
             script = latin;
             category = Letter;
@@ -733,7 +733,15 @@ class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
         self.assertIn('unicode = "00C1,E002";', written)
 
     def test_write_layer(self):
+        font = classes.GSFont()
+        font.format_version = 2
+        master = classes.GSFontMaster()
+        master.id = "M1"
+        font.masters.append(master)
+        glyph = classes.GSGlyph("A")
+        font.glyphs.append(glyph)
         layer = classes.GSLayer()
+        glyph.layers.append(layer)
         # http://docu.glyphsapp.com/#gslayer
         # parent: not written
         # name
@@ -749,7 +757,7 @@ class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
         component = classes.GSComponent(glyph="glyphName")
         layer.components.append(component)
         # guides
-        guide = classes.GSGuideLine()
+        guide = classes.GSGuide()
         guide.name = "xheight"
         layer.guides.append(guide)
         # annotations
@@ -840,8 +848,8 @@ class WriterTest(unittest.TestCase, test_helpers.AssertLinesEqual):
             );
             layerId = L1;
             leftMetricsKey = A;
-            widthMetricsKey = A;
             rightMetricsKey = A;
+            widthMetricsKey = A;
             name = "{125, 100}";
             paths = (
             {
@@ -1030,11 +1038,11 @@ rememberToDownloadARealRemindersApp = 1;}"',
         )
         self.assertWritesValue(node, expected_output)
         # Check that we can read the userData back
-        node = Parser(classes.GSNode).parse(expected_output)
+        node = classes.GSNode().read(expected_output[1:-1])
         self.assertEqual(test_user_data, dict(node.userData))
 
     def test_write_guideline(self):
-        line = classes.GSGuideLine()
+        line = classes.GSGuide()
         # http://docu.glyphsapp.com/#GSGuideLine
         line.position = Point(56, 45)
         line.angle = 11.0
@@ -1111,16 +1119,74 @@ rememberToDownloadARealRemindersApp = 1;}"',
                 """\
             {
             horizontal = 1;
-            origin = "{0, 0}";
-            target = "{0, 1}";
-            other1 = "{0, 2}";
-            other2 = "{1, 0}";
-            type = 16;
             name = "My favourite hint";
             options = 128;
+            origin = "{0, 0}";
+            other1 = "{0, 2}";
+            other2 = "{1, 0}";
+            target = "{0, 1}";
+            type = 16;
             }
         """
             ),
+        )
+
+        # FIXME: (jany) What about the undocumented scale & stem?
+        #   -> Add a test for that
+
+        # Test with target = "up"
+        # FIXME: (jany) what does target = "up" mean?
+        #   Is there an official python API to write that?
+        # hint.targetNode = 'up'
+        # written = test_helpers.write_to_lines(hint)
+        # self.assertIn('target = up;', written)
+
+    def test_write_hint_v3(self):
+        hint = classes.GSHint()
+        # http://docu.glyphsapp.com/#gshint
+        layer = classes.GSLayer()
+        path1 = classes.GSPath()
+        layer.paths.append(path1)
+        node1 = classes.GSNode(Point(100, 100))
+        path1.nodes.append(node1)
+        hint.originNode = node1
+
+        node2 = classes.GSNode(Point(200, 200))
+        path1.nodes.append(node2)
+        hint.targetNode = node2
+
+        node3 = classes.GSNode(Point(300, 300))
+        path1.nodes.append(node3)
+        hint.otherNode1 = node3
+
+        path2 = classes.GSPath()
+        layer.paths.append(path2)
+        node4 = classes.GSNode(Point(400, 400))
+        path2.nodes.append(node4)
+        hint.otherNode2 = node4
+
+        hint.type = classes.CORNER
+        hint.options = classes.TTROUND | classes.TRIPLE
+        hint.horizontal = True
+        # selected: not written
+        hint.name = "My favourite hint"
+        self.assertWrites(
+            hint,
+            dedent(
+                """\
+             {
+             horizontal = 1;
+             name = "My favourite hint";
+             options = 128;
+             origin = (0,0);
+             other1 = (0,2);
+             other2 = (1,0);
+             target = (0,1);
+             type = 16;
+             }
+         """,
+            ),
+            format_version=3,
         )
 
         # FIXME: (jany) What about the undocumented scale & stem?
@@ -1176,14 +1242,6 @@ class WriterDumpInterfaceTest(unittest.TestCase):
         string = dumps(obj)
 
         self.assertTrue(string)
-
-
-class WriterRoundtripTest(unittest.TestCase, test_helpers.AssertParseWriteRoundtrip):
-    def test_roundtrip_on_file(self):
-        filename = os.path.join(
-            os.path.dirname(__file__), "data/GlyphsUnitTestSans.glyphs"
-        )
-        self.assertParseWriteRoundtrip(filename)
 
 
 if __name__ == "__main__":

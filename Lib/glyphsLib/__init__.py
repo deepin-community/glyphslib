@@ -51,8 +51,11 @@ def load_to_ufos(
     file_or_path,
     include_instances=False,
     family_name=None,
-    propagate_anchors=True,
+    propagate_anchors=None,
     ufo_module=None,
+    expand_includes=False,
+    minimal=False,
+    glyph_data=None,
 ):
     """Load an unpacked .glyphs object to UFO objects."""
 
@@ -68,6 +71,9 @@ def load_to_ufos(
         family_name=family_name,
         propagate_anchors=propagate_anchors,
         ufo_module=ufo_module,
+        expand_includes=expand_includes,
+        minimal=minimal,
+        glyph_data=glyph_data,
     )
 
 
@@ -77,14 +83,17 @@ def build_masters(
     designspace_instance_dir=None,
     designspace_path=None,
     family_name=None,
-    propagate_anchors=True,
+    propagate_anchors=None,
     minimize_glyphs_diffs=False,
     normalize_ufos=False,
     create_background_layers=False,
     generate_GDEF=True,
     store_editor_state=True,
     write_skipexportglyphs=False,
+    expand_includes=False,
     ufo_module=None,
+    minimal=False,
+    glyph_data=None,
 ):
     """Write and return UFOs from the masters and the designspace defined in a
     .glyphs file.
@@ -120,7 +129,10 @@ def build_masters(
         generate_GDEF=generate_GDEF,
         store_editor_state=store_editor_state,
         write_skipexportglyphs=write_skipexportglyphs,
+        expand_includes=expand_includes,
         ufo_module=ufo_module,
+        minimal=minimal,
+        glyph_data=glyph_data,
     )
 
     # Only write full masters to disk. This assumes that layer sources are always part
@@ -131,7 +143,7 @@ def build_masters(
             assert source.font is ufos[source.filename]
             continue
 
-        if create_background_layers:
+        if create_background_layers and not minimal:
             ufo_create_background_layer_for_all_glyphs(source.font)
 
         ufo_path = os.path.join(master_dir, source.filename)

@@ -15,15 +15,51 @@
 
 from collections import defaultdict
 import os
-import re
 
 from glyphsLib import classes
-from .constants import GLYPHLIB_PREFIX
-from .glyph import BRACKET_GLYPH_RE
+from .constants import (
+    UFO_ORIGINAL_KERNING_GROUPS_KEY,
+    UFO_GROUPS_NOT_IN_FEATURE_KEY,
+    UFO_KERN_GROUP_PATTERN,
+    BRACKET_GLYPH_RE,
+)
 
-UFO_ORIGINAL_KERNING_GROUPS_KEY = GLYPHLIB_PREFIX + "originalKerningGroups"
-UFO_GROUPS_NOT_IN_FEATURE_KEY = GLYPHLIB_PREFIX + "groupsNotInFeature"
-UFO_KERN_GROUP_PATTERN = re.compile("^public\\.kern([12])\\.(.*)$")
+
+def _get_glyphs_with_rtl_kerning(font):
+    # Return a set of all glyph names that are referenced from font.kerningRTL,
+    # either directly as single glyphs or as part of kerning groups.
+
+    rtl_glyphs = set()
+    if not font.kerningRTL:
+        return rtl_glyphs
+
+    # sets of group names keyed by {left,right}KerningGroup
+    rtl_groups = defaultdict(set)
+    glyph_kerning_attr = {"R": "leftKerningGroup", "L": "rightKerningGroup"}
+
+    def mark_as_rtl(s, side):
+        if s.startswith(f"@MMK_{side}_"):
+            rtl_groups[glyph_kerning_attr[side]].add(s[7:])
+        else:  # single glyph
+            assert not s.startswith("@MMK_"), f"unexpected key in kerningRTL: {s}"
+            rtl_glyphs.add(s)
+
+    for kerning_id in {
+        m.id if m.metricsSource is None else m.metricsSource.id for m in font.masters
+    }:
+        for kern1, subtable in font.kerningRTL.get(kerning_id, {}).items():
+            mark_as_rtl(kern1, side="R")
+            for kern2 in subtable.keys():
+                mark_as_rtl(kern2, side="L")
+
+    for glyph in font.glyphs.values():
+        if glyph.name not in rtl_glyphs and any(
+            getattr(glyph, attr) in rtl_groups[attr]
+            for attr in glyph_kerning_attr.values()
+        ):
+            rtl_glyphs.add(glyph.name)
+
+    return rtl_glyphs
 
 
 def to_ufo_groups(self):
@@ -61,21 +97,26 @@ def to_ufo_groups(self):
                 side = match.group(1)
                 group_name = match.group(2)
                 glyph = self.font.glyphs[glyph_name]
-                if (
-                    not glyph
-                    or getattr(glyph, _glyph_kerning_attr(glyph, side)) == group_name
-                ):
+                if not glyph or getattr(glyph, _glyph_kerning_attr(side)) == group_name:
                     # The original grouping is still valid
                     groups[group].append(glyph_name)
                     # Remember not to add this glyph again later
                     # Thus the original position in the list is preserved
                     recovered.add((glyph_name, int(side)))
 
-    # Read modified grouping values
+    # Read new/modified grouping values.
+    # For glyphs that are used in Glyphs3's kerningRTL dict, take the opposite side:
+    # NOTE: Not only this breaks Glyphs<=>UFO round-tripping, but also it makes
+    # impossible for the same glyph to be kerned in both LTR and RTL dictionaries.
+    # While this is unfortunate, we believe it's better than completely ignoring
+    # all Glyphs3's RTL kerning.
+    # For more info: https://github.com/googlefonts/glyphsLib/pull/778
+    rtl_glyphs = _get_glyphs_with_rtl_kerning(self.font)
     for glyph in self.font.glyphs.values():
+        is_rtl = glyph.name in rtl_glyphs
         for side in 1, 2:
             if (glyph.name, side) not in recovered:
-                attr = _glyph_kerning_attr(glyph, side)
+                attr = _glyph_kerning_attr(side, is_rtl)
                 group = getattr(glyph, attr)
                 if group:
                     group = f"public.kern{side}.{group}"
@@ -135,14 +176,20 @@ def _to_glyphs_kerning_group(self, name, glyphs):
     for glyph_name in glyphs:
         glyph = self.font.glyphs[glyph_name]
         if glyph:
-            setattr(glyph, _glyph_kerning_attr(glyph, side), group_name)
+            setattr(glyph, _glyph_kerning_attr(side), group_name)
 
 
-def _glyph_kerning_attr(glyph, side):
-    """Return leftKerningGroup or rightKerningGroup depending on the UFO
+def _glyph_kerning_attr(side, is_rtl=False):
+    """Return rightKerningGroup or leftKerningGroup depending on the UFO
     group's side (1 or 2).
+
+    Flip values for RTL kerning.
     """
-    if int(side) == 1:
+    side = int(side)
+    assert side in (1, 2), f"invalid kerning side: {side}"
+    if is_rtl:
+        side = 2 if side == 1 else 1
+    if side == 1:
         return "rightKerningGroup"
     else:
         return "leftKerningGroup"

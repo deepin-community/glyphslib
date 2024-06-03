@@ -34,7 +34,7 @@ from glyphsLib.classes import (
     GSFeature,
     GSAnnotation,
     GSFeaturePrefix,
-    GSGuideLine,
+    GSGuide,
     GSHint,
     GSNode,
     GSPath,
@@ -61,8 +61,9 @@ TESTFILE_PATH = os.path.join(
 )
 
 
-def generate_minimal_font():
+def generate_minimal_font(format_version=2):
     font = GSFont()
+    font.format_version = format_version
     font.appVersion = 895
     font.date = datetime.datetime.today()
     font.familyName = "MyFont"
@@ -302,7 +303,7 @@ class GSFontFromFileTest(GSObjectsTestCase):
     def test_glyphs(self):
         font = self.font
         self.assertGreaterEqual(len(list(font.glyphs)), 1)
-        by_index = font.glyphs[3]
+        by_index = font.glyphs[4]
         by_name = font.glyphs["adieresis"]
         by_unicode_char = font.glyphs["ä"]
         by_unicode_value = font.glyphs["00E4"]
@@ -560,7 +561,7 @@ class GSFontMasterFromFileTest(GSObjectsTestCase):
         self.assertIsInstance(master.guides, list)
         master.guides = []
         self.assertEqual(len(master.guides), 0)
-        newGuide = GSGuideLine()
+        newGuide = GSGuide()
         newGuide.position = Point("{100, 100}")
         newGuide.angle = -10.0
         master.guides.append(newGuide)
@@ -573,7 +574,7 @@ class GSFontMasterFromFileTest(GSObjectsTestCase):
         self.assertIsInstance(master.guides, list)
         master.guides = []
         self.assertEqual(len(master.guides), 0)
-        newGuide = GSGuideLine()
+        newGuide = GSGuide()
         newGuide.position = Point("{100, 100}")
         newGuide.angle = -10.0
         master.guides.append(newGuide)
@@ -1129,7 +1130,7 @@ class GSLayerFromFileTest(GSObjectsTestCase):
             self.assertEqual(guide.parent, layer)
         layer.guides = []
         self.assertEqual(len(layer.guides), 0)
-        newGuide = GSGuideLine()
+        newGuide = GSGuide()
         newGuide.position = Point("{100, 100}")
         newGuide.angle = -10.0
         amount = len(layer.guides)
@@ -1450,10 +1451,10 @@ class GSComponentFromFileTest(GSObjectsTestCase):
     # componentLayer()
 
 
-class GSGuideLineTest(unittest.TestCase):
+class GSGuideTest(unittest.TestCase):
     def test_repr(self):
-        guide = GSGuideLine()
-        self.assertEqual(repr(guide), "<GSGuideLine x=0.0 y=0.0 angle=0.0>")
+        guide = GSGuide()
+        self.assertEqual(repr(guide), "<GSGuide x=0.0 y=0.0 angle=0.0>")
 
 
 class GSAnchorFromFileTest(GSObjectsTestCase):

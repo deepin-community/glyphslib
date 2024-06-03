@@ -15,17 +15,21 @@
 
 from collections import defaultdict
 import re
+import logging
 
 from glyphsLib.util import bin_to_int_list, int_list_to_bin
 from .filters import parse_glyphs_filter
+from .common import to_ufo_color
 from .constants import (
     GLYPHS_PREFIX,
+    UFO2FT_COLOR_PALETTES_KEY,
     UFO2FT_FILTERS_KEY,
     UFO2FT_USE_PROD_NAMES_KEY,
     CODEPAGE_RANGES,
     REVERSE_CODEPAGE_RANGES,
     PUBLIC_PREFIX,
     UFO_FILENAME_CUSTOM_PARAM,
+    UFO2FT_META_TABLE_KEY,
 )
 from .features import replace_feature, replace_prefixes
 
@@ -68,6 +72,9 @@ going from Glyphs to UFOs.
 """
 
 CUSTOM_PARAM_PREFIX = GLYPHS_PREFIX + "customParameter."
+
+
+logger = logging.getLogger(__name__)
 
 
 def identity(value):
@@ -146,6 +153,11 @@ class GlyphsObjectProxy:
         opposed to a master or instance."""
         return hasattr(self._owner, "glyphs")
 
+    def get_property(self, key):
+        if key and hasattr(self._owner, "properties"):
+            return self._owner.properties.get(key)
+        return None
+
 
 class UFOProxy:
     """Record access to the UFO's lib custom parameters"""
@@ -198,6 +210,7 @@ class ParamHandler(AbstractParamHandler):
         ufo_name=None,
         glyphs_long_name=None,
         glyphs_multivalued=False,
+        glyphs3_property=None,
         ufo_prefix=CUSTOM_PARAM_PREFIX,
         ufo_info=True,
         ufo_default=None,
@@ -207,6 +220,7 @@ class ParamHandler(AbstractParamHandler):
         self.glyphs_name = glyphs_name
         self.glyphs_long_name = glyphs_long_name
         self.glyphs_multivalued = glyphs_multivalued
+        self.glyphs3_property = glyphs3_property
         # By default, they have the same name in both
         self.ufo_name = ufo_name or glyphs_name
         self.ufo_prefix = ufo_prefix
@@ -234,20 +248,30 @@ class ParamHandler(AbstractParamHandler):
         self._write_to_ufo(glyphs, ufo, ufo_value)
 
     def _read_from_glyphs(self, glyphs):
-        # Try both the prefixed (long) name and the short name
+        value = None
+        # Try to read from the properties first.
+        value = glyphs.get_property(self.glyphs3_property)
+        if value is not None:
+            return value
+        # Try to read from the custom parameters next, using both the short
+        # name, which has precedence, and the prefixed (long) name.
         if self.glyphs_multivalued:
             getter = glyphs.get_custom_values
         else:
             getter = glyphs.get_custom_value
-        # The value registered using the small name has precedence
-        small_name_value = getter(self.glyphs_name)
-        if small_name_value is not None:
-            return small_name_value
+        value = getter(self.glyphs_name)
+        if value is not None:
+            return value
         if self.glyphs_long_name is not None:
-            return getter(self.glyphs_long_name)
-        return None
+            value = getter(self.glyphs_long_name)
+        return value
 
     def _write_to_glyphs(self, glyphs, value):
+        # We currently convert UFO to Glyphs2 files.
+        # If we ever export Glyphs3 by default, we need a similar test
+        # here to the one in _read_from_glyphs to determine whether a
+        # value should be placed in the new properties top-level key.
+
         # Never write the prefixed (long) name?
         # FIXME: (jany) maybe should rather preserve the naming choice of user
         if self.glyphs_multivalued:
@@ -286,18 +310,13 @@ def register(handler):
 
 
 GLYPHS_UFO_CUSTOM_PARAMS = (
+    # These are be stored in the official descriptor attributes.
+    # "familyName",
+    # "fileName",
+    ("compatibleFullName", "openTypeNameCompatibleFullName"),
     ("hheaAscender", "openTypeHheaAscender"),
     ("hheaDescender", "openTypeHheaDescender"),
     ("hheaLineGap", "openTypeHheaLineGap"),
-    ("compatibleFullName", "openTypeNameCompatibleFullName"),
-    ("description", "openTypeNameDescription"),
-    ("license", "openTypeNameLicense"),
-    ("licenseURL", "openTypeNameLicenseURL"),
-    ("preferredFamilyName", "openTypeNamePreferredFamilyName"),
-    ("preferredSubfamilyName", "openTypeNamePreferredSubfamilyName"),
-    ("sampleText", "openTypeNameSampleText"),
-    ("WWSFamilyName", "openTypeNameWWSFamilyName"),
-    ("WWSSubfamilyName", "openTypeNameWWSSubfamilyName"),
     # OS/2 parameters
     ("panose", "openTypeOS2Panose"),
     ("fsType", "openTypeOS2Type"),
@@ -305,30 +324,31 @@ GLYPHS_UFO_CUSTOM_PARAMS = (
     ("typoDescender", "openTypeOS2TypoDescender"),
     ("typoLineGap", "openTypeOS2TypoLineGap"),
     ("unicodeRanges", "openTypeOS2UnicodeRanges"),
-    ("vendorID", "openTypeOS2VendorID"),
     ("strikeoutSize", "openTypeOS2StrikeoutSize"),
     ("strikeoutPosition", "openTypeOS2StrikeoutPosition"),
-    # OS/2 Subscript parameters
+    # OS/2 subscript parameters
     ("subscriptXSize", "openTypeOS2SubscriptXSize"),
     ("subscriptYSize", "openTypeOS2SubscriptYSize"),
     ("subscriptXOffset", "openTypeOS2SubscriptXOffset"),
     ("subscriptYOffset", "openTypeOS2SubscriptYOffset"),
-    # OS/2 Superscript parameters
+    # OS/2 superscript parameters
     ("superscriptXSize", "openTypeOS2SuperscriptXSize"),
     ("superscriptYSize", "openTypeOS2SuperscriptYSize"),
     ("superscriptXOffset", "openTypeOS2SuperscriptXOffset"),
     ("superscriptYOffset", "openTypeOS2SuperscriptYOffset"),
-    # ('weightClass', 'openTypeOS2WeightClass'),
-    # ('widthClass', 'openTypeOS2WidthClass'),
-    # ('winAscent', 'openTypeOS2WinAscent'),
-    # ('winDescent', 'openTypeOS2WinDescent'),
+    # These can be recovered by reading the mapping backward.
+    # ("weightClass", "openTypeOS2WeightClass"),
+    # ("widthClass", "openTypeOS2WidthClass"),
+    # These are processed separatedly down below.
+    # ("winAscent", "openTypeOS2WinAscent"),
+    # ("winDescent", "openTypeOS2WinDescent"),
     ("vheaVertAscender", "openTypeVheaVertTypoAscender"),
     ("vheaVertDescender", "openTypeVheaVertTypoDescender"),
     ("vheaVertLineGap", "openTypeVheaVertTypoLineGap"),
     ("vheaVertTypoAscender", "openTypeVheaVertTypoAscender"),
     ("vheaVertTypoDescender", "openTypeVheaVertTypoDescender"),
     ("vheaVertTypoLineGap", "openTypeVheaVertTypoLineGap"),
-    # Postscript parameters
+    # PostScript parameters
     ("blueScale", "postscriptBlueScale"),
     ("blueShift", "postscriptBlueShift"),
     ("isFixedPitch", "postscriptIsFixedPitch"),
@@ -337,6 +357,62 @@ GLYPHS_UFO_CUSTOM_PARAMS = (
 )
 for glyphs_name, ufo_name in GLYPHS_UFO_CUSTOM_PARAMS:
     register(ParamHandler(glyphs_name, ufo_name, glyphs_long_name=ufo_name))
+
+# Reference:
+# https://github.com/googlefonts/glyphsLib/pull/881#issuecomment-1474226616
+GLYPHS_UFO_CUSTOM_PARAMS_GLYPHS3_PROPERTIES = (
+    # This is stored in the official descriptor attributes.
+    # "familyNames",
+    # TODO: Map these properties to custom parameters if applicable.
+    # "designers",
+    # "designerURL",
+    # "manufacturers",
+    # "manufacturerURL",
+    # "copyrights",
+    ("versionString", "openTypeNameVersion", "versionString"),
+    ("vendorID", "openTypeOS2VendorID", "vendorID"),
+    # TODO: Map this property to a custom parameter if applicable.
+    # "uniqueID",
+    ("license", "openTypeNameLicense", "licenses"),
+    ("licenseURL", "openTypeNameLicenseURL", "licenseURL"),
+    ("trademark", "trademark", "trademarks"),
+    ("description", "openTypeNameDescription", "descriptions"),
+    ("sampleText", "openTypeNameSampleText", "sampleTexts"),
+    # TODO: Should the postscriptFullName or postscriptFullNames property be
+    # used for the postscriptFullName custom parameter?
+    # "postscriptFullNames",
+    ("postscriptFullName", "postscriptFullName", "postscriptFullName"),
+    # TODO: This is stored in the official descriptor attibutes. Should this
+    # entry be removed?
+    ("postscriptFontName", "postscriptFontName", "postscriptFontName"),
+    # TODO: Map these properties to custom parameters if applicable.
+    # "compatibleFullNames",
+    # "styleNames",
+    # "styleMapFamilyNames",
+    # "styleMapStyleNames",
+    ("preferredFamilyName", "openTypeNamePreferredFamilyName", "preferredFamilyNames"),
+    (
+        "preferredSubfamilyName",
+        "openTypeNamePreferredSubfamilyName",
+        "preferredSubfamilyNames",
+    ),
+    # TODO: Map this property to a custom parameter if applicable.
+    # "variableStyleNames",
+    ("WWSFamilyName", "openTypeNameWWSFamilyName", "WWSFamilyName"),
+    ("WWSSubfamilyName", "openTypeNameWWSSubfamilyName", "WWSSubfamilyName"),
+    # TODO: Map this property to a custom parameter if applicable.
+    # "variationsPostScriptNamePrefix",
+)
+
+for glyphs_name, ufo_name, property_name in GLYPHS_UFO_CUSTOM_PARAMS_GLYPHS3_PROPERTIES:
+    register(
+        ParamHandler(
+            glyphs_name,
+            ufo_name,
+            glyphs_long_name=ufo_name,
+            glyphs3_property=property_name,
+        )
+    )
 
 # TODO: (jany) for all the following fields, check that they are stored in a
 # meaningful Glyphs customParameter. Maybe they have short names?
@@ -352,13 +428,11 @@ GLYPHS_UFO_CUSTOM_PARAMS_NO_SHORT_NAME = (
     "openTypeNameVersion",
     "openTypeNameUniqueID",
     "openTypeOS2FamilyClass",
-    "postscriptFontName",
-    "postscriptFullName",
     "postscriptSlantAngle",
     "postscriptUniqueID",
-    # Should this be handled in `blue_values.py`?
-    # 'postscriptFamilyBlues',
-    # 'postscriptFamilyOtherBlues',
+    # TODO: Should this be handled in `blue_values.py`?
+    # "postscriptFamilyBlues",
+    # "postscriptFamilyOtherBlues",
     "postscriptBlueFuzz",
     "postscriptForceBold",
     "postscriptDefaultWidthX",
@@ -368,16 +442,11 @@ GLYPHS_UFO_CUSTOM_PARAMS_NO_SHORT_NAME = (
     "postscriptWindowsCharacterSet",
     "macintoshFONDFamilyID",
     "macintoshFONDName",
-    "trademark",
     "styleMapFamilyName",
     "styleMapStyleName",
 )
 for name in GLYPHS_UFO_CUSTOM_PARAMS_NO_SHORT_NAME:
     register(ParamHandler(name))
-
-
-# TODO: (jany) handle dynamic version number replacement
-register(ParamHandler("versionString", "openTypeNameVersion"))
 
 
 class EmptyListDefaultParamHandler(ParamHandler):
@@ -485,23 +554,174 @@ register(
     )
 )
 
-# TODO: (jany) look at
-# https://forum.glyphsapp.com/t/name-table-entry-win-id4/3811/10
-# Use Name Table Entry for the next param
+register(
+    ParamHandler(
+        glyphs_name="gasp Table",
+        ufo_name="openTypeGaspRangeRecords",
+        value_to_ufo=to_ufo_gasp_table,
+        value_to_glyphs=to_glyphs_gasp_table,
+    )
+)
 
 
-def to_glyphs_opentype_name_records(value):
-    # In ufoLib2, font.info.openTypeNameRecords is a list of NameRecord objects,
-    # while in defcon it is a list of dicts; reduce both to dicts.
-    return [dict(r) for r in value]
+# convert Glyphs' meta Table to UFO openTypeMeta
+def to_ufo_meta_table(value):
+    meta = {}
+    # In:  {data = "de-Latn"; tag = dlng; }, {data = "sr-Cyrl"; tag = slng; }
+    # Out: { "dlng": [ "de-Latn" ], "slng": [ "sr-Cyrl" ] }
+    for entry in value:
+        tag, data = entry["tag"], entry["data"]
+        if tag in meta:
+            logger.warning(
+                f"Multiple '{tag}' tags in meta table; only the last one will be used"
+            )
+
+        if tag in ("appl", "bild"):
+            meta[tag] = data
+        else:
+            meta.setdefault(tag, []).append(data)
+    return meta
+
+
+def to_glyphs_meta_table(value):
+    meta = []
+    for tag, data in value.items():
+        if isinstance(data, list):
+            for entry in data:
+                meta.append({"tag": tag, "data": entry})
+        else:
+            meta.append({"tag": tag, "data": data})
+    return meta
 
 
 register(
     ParamHandler(
-        glyphs_name="openTypeNameRecords",
-        value_to_glyphs=to_glyphs_opentype_name_records,
+        glyphs_name="meta Table",
+        ufo_name=UFO2FT_META_TABLE_KEY,
+        ufo_info=False,
+        ufo_prefix="",
+        value_to_ufo=to_ufo_meta_table,
+        value_to_glyphs=to_glyphs_meta_table,
     )
 )
+
+
+def to_ufo_color_palettes(value):
+    return [[to_ufo_color(color) for color in palette] for palette in value]
+
+
+def _to_glyphs_color(color):
+    if color[0] == color[1] == color[2]:
+        color = [color[0], color[3]]
+    return ",".join(str(round(v * 255)) for v in color)
+
+
+def to_glyphs_color_palettes(value):
+    return [[_to_glyphs_color(color) for color in palette] for palette in value]
+
+
+register(
+    ParamHandler(
+        glyphs_name="Color Palettes",
+        ufo_name=UFO2FT_COLOR_PALETTES_KEY,
+        ufo_info=False,
+        ufo_prefix="",
+        value_to_ufo=to_ufo_color_palettes,
+        value_to_glyphs=to_glyphs_color_palettes,
+    )
+)
+
+
+class NameRecordParamHandler(AbstractParamHandler):
+    def to_entry(self, record):
+        identifiers = [
+            record["nameID"],
+            record["platformID"],
+            record["encodingID"],
+            record["languageID"],
+        ]
+        encoding = " ".join(map(str, identifiers))
+        string = record["string"]
+
+        return f"{encoding}; {string}"
+
+    def parse_decimal(self, string):
+        # In Python octal strings must start with a prefix. Glyphs
+        # uses AFDKO decimal number specification which allows
+        # octals starting with "0".
+        if string.startswith("0x"):
+            return int(string, 16)
+        elif string.startswith("0"):
+            return int(string, 8)
+        else:
+            return int(string, 10)
+
+    # See the Glyphs manual for the Name Table Entry format:
+    # https://glyphsapp.com/media/pages/learn/3ec528a11c-1634835554/glyphs-3-handbook.pdf
+    def to_record(self, entry):
+        # Split only on the first semicolon occurance. Glyphs doesn't
+        # have any special escaping, so anything after the first
+        # semicolon is treated as part of the name table entry.
+        parts = entry.split(";", 1)
+
+        if len(parts) != 2:
+            logger.warning(f"Invalid Name Table Entry '{entry}' ignored.")
+        else:
+            identifiers = parts[0].split(" ")
+            # Strip whitespace. This behaviour is undefined, but
+            # it seems sensible to remove leading and trailing spaces.
+            string = parts[1].strip()
+
+            try:
+                name_id = self.parse_decimal(identifiers[0])
+                platform_id = 3  # Windows
+                encoding_id = 1  # Unicode BMP
+                language_id = 0x409  # English, United States
+
+                if len(identifiers) >= 2:
+                    platform_id = self.parse_decimal(identifiers[1])
+
+                if len(identifiers) >= 3:
+                    encoding_id = self.parse_decimal(identifiers[2])
+                elif platform_id == 1:
+                    encoding_id = 0
+
+                if len(identifiers) >= 4:
+                    language_id = self.parse_decimal(identifiers[3])
+                elif platform_id == 1:
+                    language_id = 0
+
+                return {
+                    "nameID": name_id,
+                    "platformID": platform_id,
+                    "encodingID": encoding_id,
+                    "languageID": language_id,
+                    "string": string,
+                }
+            except ValueError:
+                logger.warning(f"Invalid name table identifiers '{parts[0]}'.")
+
+    def to_glyphs(self, glyphs, ufo):
+        if glyphs.is_font():
+            records = ufo.get_info_value("openTypeNameRecords")
+            if records:
+                entries = [self.to_entry(record) for record in records]
+
+                glyphs.set_custom_values("Name Table Entry", entries)
+
+    def to_ufo(self, builder, glyphs, ufo):
+        entries = glyphs.get_custom_values("Name Table Entry")
+        if entries:
+            records = ufo.get_info_value("openTypeNameRecords") or []
+            for entry in entries:
+                record = self.to_record(entry)
+                if record is not None:
+                    records.append(record)
+            ufo.set_info_value("openTypeNameRecords", records)
+
+
+register(NameRecordParamHandler())
+
 
 register(ParamHandler(glyphs_name="Disable Last Change", ufo_name="disablesLastChange"))
 
@@ -598,14 +818,14 @@ class OS2SelectionParamHandler(AbstractParamHandler):
         if not use_typo_metrics and not has_wws_name and unsupported_bits is None:
             return
 
-        selection_bits = []
+        selection_bits = ufo.get_info_value("openTypeOS2Selection") or []
         if use_typo_metrics:
             selection_bits.append(7)
         if has_wws_name:
             selection_bits.append(8)
         if unsupported_bits:
             selection_bits.extend(unsupported_bits)
-        ufo.set_info_value("openTypeOS2Selection", sorted(selection_bits))
+        ufo.set_info_value("openTypeOS2Selection", sorted(set(selection_bits)))
 
 
 register(OS2SelectionParamHandler())
@@ -628,6 +848,12 @@ class GlyphOrderParamHandler(AbstractParamHandler):
         if glyphs.is_font():
             glyphs_glyphOrder = glyphs.get_custom_value("glyphOrder")
             if glyphs_glyphOrder:
+                ufo_glyphOrder = ufo.get_lib_value(PUBLIC_PREFIX + "glyphOrder")
+                # If the custom parameter provides partial coverage we want to
+                # append the original glyph order for uncovered glyphs.
+                glyphs_glyphOrder += [
+                    g for g in ufo_glyphOrder if g not in glyphs_glyphOrder
+                ]
                 ufo.set_lib_value(PUBLIC_PREFIX + "glyphOrder", glyphs_glyphOrder)
 
 
@@ -760,7 +986,7 @@ register(ReplaceFeatureParamHandler())
 
 
 class ReencodeGlyphsParamHandler(AbstractParamHandler):
-    """ The "Reencode Glyphs" custom parameter contains a list of
+    """The "Reencode Glyphs" custom parameter contains a list of
     'glyphname=unicodevalue' strings: e.g., ["smiley=E100", "logo=E101"].
     It only applies to specific instance (not to master or globally) and is
     meant to assign Unicode values to glyphs with the specied name at export
@@ -803,6 +1029,37 @@ class ReencodeGlyphsParamHandler(AbstractParamHandler):
 
 
 register(ReencodeGlyphsParamHandler())
+
+
+class RenameGlyphsParamHandler(AbstractParamHandler):
+    """The "Rename Glyphs" custom parameter contains a list of
+    'glyphname=glyphname' strings: e.g., ["a=b", "b=a"].
+    It only applies to specific instance (not to master or globally).
+
+    The glyph data is swapped, but the unicode assignments remain the
+    same.
+    """
+
+    def to_ufo(self, builder, glyphs, ufo):
+        rename_list = glyphs.get_custom_value("Rename Glyphs")
+        if not rename_list:
+            return
+        ufo = ufo._owner
+        for entry in rename_list:
+            oldname, newname = entry.split("=")
+            ufo[newname], ufo[oldname] = ufo[oldname], ufo[newname]
+            ufo[newname].unicodes, ufo[oldname].unicodes = (
+                ufo[oldname].unicodes,
+                ufo[newname].unicodes,
+            )
+
+    def to_glyphs(self, glyphs, ufo):
+        # The 'Reencode Glyphs' parameter only applies to instances, which
+        # are not meant to be roundtripped. No need to handle it here.
+        pass
+
+
+register(RenameGlyphsParamHandler())
 
 
 def to_ufo_custom_params(self, ufo, glyphs_object):
@@ -869,8 +1126,7 @@ DEFAULT_PARAMETERS = (
 
 
 def _set_default_params(ufo):
-    """ Set Glyphs.app's default parameters when different from ufo2ft ones.
-    """
+    """Set Glyphs.app's default parameters when different from ufo2ft ones."""
     for _, ufo_name, default_value in DEFAULT_PARAMETERS:
         if getattr(ufo.info, ufo_name) is None:
             if isinstance(default_value, list):
@@ -881,7 +1137,7 @@ def _set_default_params(ufo):
 
 
 def _unset_default_params(glyphs):
-    """ Unset Glyphs.app's parameters that have default values.
+    """Unset Glyphs.app's parameters that have default values.
     FIXME: (jany) maybe this should be taken care of in the writer? and/or
         classes should have better default values?
     """

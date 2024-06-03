@@ -18,22 +18,17 @@ import posixpath
 
 from .constants import (
     GLYPHS_PREFIX,
-    GLYPHLIB_PREFIX,
     PUBLIC_PREFIX,
     UFO2FT_FEATURE_WRITERS_KEY,
     DEFAULT_FEATURE_WRITERS,
+    DEFAULT_LAYER_NAME,
+    UFO_DATA_KEY,
+    FONT_USER_DATA_KEY,
+    LAYER_LIB_KEY,
+    LAYER_NAME_KEY,
+    GLYPH_USER_DATA_KEY,
+    NODE_USER_DATA_KEY,
 )
-
-UFO_DATA_KEY = GLYPHLIB_PREFIX + "ufoData"
-FONT_USER_DATA_KEY = GLYPHLIB_PREFIX + "fontUserData"
-LAYER_LIB_KEY = GLYPHLIB_PREFIX + "layerLib"
-GLYPH_USER_DATA_KEY = GLYPHLIB_PREFIX + "glyphUserData"
-NODE_USER_DATA_KEY = GLYPHLIB_PREFIX + "nodeUserData"
-
-
-def _has_manual_kern_feature(font):
-    """Return true if the GSFont contains a manually written 'kern' feature."""
-    return any(f for f in font.features if f.name == "kern" and not f.automatic)
 
 
 def to_designspace_family_user_data(self):
@@ -41,16 +36,6 @@ def to_designspace_family_user_data(self):
         for key, value in dict(self.font.userData).items():
             if _user_data_has_no_special_meaning(key):
                 self.designspace.lib[key] = value
-
-        # only write our custom ufo2ft featureWriters settings if the font
-        # does have a manually written 'kern' feature; and if the lib key wasn't
-        # already set in font.userData (in which case we assume the user knows
-        # what she's doing).
-        if (
-            _has_manual_kern_feature(self.font)
-            and UFO2FT_FEATURE_WRITERS_KEY not in self.designspace.lib
-        ):
-            self.designspace.lib[UFO2FT_FEATURE_WRITERS_KEY] = DEFAULT_FEATURE_WRITERS
 
 
 def to_ufo_family_user_data(self, ufo):
@@ -77,10 +62,24 @@ def to_ufo_glyph_user_data(self, ufo, glyph):
         ufo.lib[key] = dict(glyph.userData)
 
 
-def to_ufo_layer_lib(self, ufo_layer):
+def to_ufo_layer_lib(self, master, ufo, ufo_layer):
     key = LAYER_LIB_KEY + "." + ufo_layer.name
+    # glyphsLib v5.3.2 and previous versions stored the layer lib in
+    # the GSFont useData under a key named after the layer.
+    # When different original UFOs each had a layer with the same layer name,
+    # only the layer lib of the last one was stored and was exported to UFOs
     if key in self.font.userData.keys():
-        ufo_layer.lib = self.font.userData[key]
+        ufo_layer.lib.update(self.font.userData[key])
+    if key in master.userData.keys():
+        ufo_layer.lib.update(master.userData[key])
+        if LAYER_NAME_KEY in ufo_layer.lib:
+            layer_name = ufo_layer.lib.pop(LAYER_NAME_KEY)
+            # ufoLib2
+            if hasattr(ufo, "renameLayer") and callable(ufo.renameLayer):
+                ufo.renameLayer(ufo_layer.name, layer_name)
+            # defcon
+            else:
+                ufo_layer.name = layer_name
 
 
 def to_ufo_layer_user_data(self, ufo_glyph, layer):
@@ -146,15 +145,24 @@ def to_glyphs_glyph_user_data(self, ufo, glyph):
         glyph.userData = ufo.lib[key]
 
 
-def to_glyphs_layer_lib(self, ufo_layer):
+def to_glyphs_layer_lib(self, ufo_layer, master):
     user_data = {}
     for key, value in ufo_layer.lib.items():
         if _user_data_has_no_special_meaning(key):
             user_data[key] = value
 
+    # the default layer may have a custom name
+    layer_name = ufo_layer.name
+    if (
+        ufo_layer is self._sources[master.id].font.layers.defaultLayer
+        and layer_name != DEFAULT_LAYER_NAME
+    ):
+        user_data[LAYER_NAME_KEY] = ufo_layer.name
+        layer_name = DEFAULT_LAYER_NAME
+
     if user_data:
-        key = LAYER_LIB_KEY + "." + ufo_layer.name
-        self.font.userData[key] = user_data
+        key = LAYER_LIB_KEY + "." + layer_name
+        master.userData[key] = user_data
 
 
 def to_glyphs_layer_user_data(self, ufo_glyph, layer):

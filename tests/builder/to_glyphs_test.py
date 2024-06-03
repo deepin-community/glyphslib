@@ -211,7 +211,7 @@ def test_guidelines(ufo_module):
         assert horizontal.position.y == 20
         assert horizontal.angle == 0
 
-    (ufo,) = to_ufos(font)
+    (ufo,) = to_ufos(font, minimal=False)
 
     for obj in [ufo, ufo["a"]]:
         angled, vertical, horizontal = obj.guidelines
@@ -261,7 +261,10 @@ def test_glyph_height_and_vertical_origin(ufo_module):
     a = ufo.newGlyph("a")
     a.height = 1024
     a.verticalOrigin = 100
-    ufo.newGlyph("b")
+    b = ufo.newGlyph("b")
+    b.height = ufo.info.ascender - ufo.info.descender  # Glyphs default vertWidth
+    c = ufo.newGlyph("c")
+    assert c.height == 0  # defcon default glyph.height == 0
 
     font = to_glyphs([ufo])
 
@@ -269,13 +272,17 @@ def test_glyph_height_and_vertical_origin(ufo_module):
     assert font.glyphs["a"].layers[0].vertOrigin == 900
     assert font.glyphs["b"].layers[0].vertWidth is None
     assert font.glyphs["b"].layers[0].vertOrigin is None
+    assert font.glyphs["c"].layers[0].vertWidth == 0
+    assert font.glyphs["c"].layers[0].vertOrigin is None
 
     (ufo,) = to_ufos(font)
 
     assert ufo["a"].height == font.glyphs["a"].layers[0].vertWidth
     assert ufo["a"].verticalOrigin == 100
     assert ufo["b"].height == (ufo.info.ascender - ufo.info.descender)
-    assert ufo["b"].verticalOrigin == 1000
+    assert ufo["b"].verticalOrigin == ufo.info.ascender
+    assert ufo["c"].height == 0
+    assert ufo["c"].verticalOrigin == ufo.info.ascender
 
 
 def test_glyph_height_and_vertical_origin_trigger_vhea_metrics(ufo_module):
@@ -457,13 +464,13 @@ def test_dont_copy_advance_to_the_background_unless_it_was_there(tmpdir, ufo_mod
     bg_c = bg.newGlyph("c")
     bg_c.width = 400
 
-    font = to_glyphs([ufo])
+    converted_font = to_glyphs([ufo])
     path = os.path.join(str(tmpdir), "test.glyphs")
-    font.save(path)
+    converted_font.save(path)
     saved_font = classes.GSFont(path)
 
-    for font in [font, saved_font]:
-        (ufo,) = to_ufos(font)
+    for font in [converted_font, saved_font]:
+        (ufo,) = to_ufos(font, minimal=False)
 
         assert ufo["a"].width == 100
         assert ufo.layers["public.background"]["a"].width == 0
@@ -483,12 +490,12 @@ def test_double_unicodes(tmpdir, ufo_module):
     z = ufo.newGlyph("z")
     z.unicodes = [0x005A, 0x007A]
 
-    font = to_glyphs([ufo])
+    converted_font = to_glyphs([ufo])
     path = os.path.join(str(tmpdir), "test.glyphs")
-    font.save(path)
+    converted_font.save(path)
     saved_font = classes.GSFont(path)
 
-    for font in [font, saved_font]:
+    for font in [converted_font, saved_font]:
         assert font.glyphs["z"].unicode == "005A"
         assert font.glyphs["z"].unicodes == ["005A", "007A"]
 
@@ -583,6 +590,23 @@ def test_custom_stylemap_style_name(ufo_module):
     (ufo,) = to_ufos(font)
 
     assert ufo.info.styleMapStyleName == "bold"
+
+
+def test_custom_default_layer_name(ufo_module):
+    ufo1 = ufo_module.Font()
+    ufo2 = ufo_module.Font()
+    if hasattr(ufo1, "renameLayer") and callable(ufo1.renameLayer):
+        ufo1.renameLayer("public.default", "custom default")
+        ufo2.renameLayer("public.default", "other default")
+    else:
+        ufo1.layers.defaultLayer.name = "custom default"
+        ufo2.layers.defaultLayer.name = "other default"
+
+    font = to_glyphs([ufo1, ufo2])
+    (ufo1, ufo2) = to_ufos(font)
+
+    assert ufo1.layers.defaultLayer.name == "custom default"
+    assert ufo2.layers.defaultLayer.name == "other default"
 
 
 def test_weird_kerning_roundtrip(ufo_module):

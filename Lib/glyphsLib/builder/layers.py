@@ -12,40 +12,59 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .constants import GLYPHS_PREFIX
+from .constants import (
+    UFO2FT_COLOR_LAYER_MAPPING_KEY,
+    LAYER_ID_KEY,
+    LAYER_ORDER_PREFIX,
+    LAYER_ORDER_TEMP_USER_DATA_KEY,
+)
 
-LAYER_ID_KEY = GLYPHS_PREFIX + "layerId"
-LAYER_ORDER_PREFIX = GLYPHS_PREFIX + "layerOrderInGlyph."
-LAYER_ORDER_TEMP_USER_DATA_KEY = "__layerOrder"
+
+def to_ufo_color_layer_names(self, master, ufo):
+    for glyph in ufo.layers.defaultLayer:
+        if UFO2FT_COLOR_LAYER_MAPPING_KEY in glyph.lib:
+            glyph.lib[UFO2FT_COLOR_LAYER_MAPPING_KEY] = [
+                (self._layer_map[v[0]], v[1])
+                for v in glyph.lib[UFO2FT_COLOR_LAYER_MAPPING_KEY]
+            ]
 
 
 def to_ufo_layer(self, glyph, layer):
     ufo_font = self._sources[layer.associatedMasterId or layer.layerId].font
+
+    layer_name = layer.name
+    # Give color layers better names
+    if layer._is_color_palette_layer():
+        layer_name = f"color.{layer._color_palette_index()}"
+    elif layer._is_brace_layer():
+        layer_name = layer._brace_layer_name()
+
     if layer.associatedMasterId == layer.layerId:
         ufo_layer = ufo_font.layers.defaultLayer
-    elif layer.name not in ufo_font.layers:
-        ufo_layer = ufo_font.newLayer(layer.name)
-    elif layer.name in ufo_font.layers and glyph.name in ufo_font.layers[layer.name]:
+    elif layer_name not in ufo_font.layers:
+        ufo_layer = ufo_font.newLayer(layer_name)
+    elif layer_name in ufo_font.layers and glyph.name in ufo_font.layers[layer_name]:
         self.logger.warning(
             "%s %s: Glyph %s, layer %s: Duplicate glyph layer name",
             ufo_font.info.familyName,
             ufo_font.info.styleName,
             glyph.name,
-            layer.name,
+            layer_name,
         )
         n = 1
-        new_layer_name = layer.name
+        new_layer_name = layer_name
         while new_layer_name in ufo_font.layers:
-            new_layer_name = layer.name + " #" + repr(n)
+            new_layer_name = layer_name + " #" + repr(n)
             n += 1
         ufo_layer = ufo_font.newLayer(new_layer_name)
     else:
-        ufo_layer = ufo_font.layers[layer.name]
+        ufo_layer = ufo_font.layers[layer_name]
     if self.minimize_glyphs_diffs:
         ufo_layer.lib[LAYER_ID_KEY] = layer.layerId
         ufo_layer.lib[LAYER_ORDER_PREFIX + glyph.name] = _layer_order_in_glyph(
             self, layer
         )
+    self._layer_map[layer.layerId] = ufo_layer.name
     return ufo_layer
 
 
@@ -71,7 +90,7 @@ def _layer_order_in_glyph(self, layer):
 
 
 def to_glyphs_layer(self, ufo_layer, glyph, master):
-    if ufo_layer.name == "public.default":  # TODO: (jany) constant
+    if ufo_layer is self._sources[master.id].font.layers.defaultLayer:
         layer = _get_or_make_foreground(self, glyph, master)
     elif ufo_layer.name == "public.background":
         master_layer = _get_or_make_foreground(self, glyph, master)

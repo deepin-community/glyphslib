@@ -14,9 +14,10 @@
 # limitations under the License.
 
 
-from textwrap import dedent
-import unittest
+import copy
 import os
+import unittest
+from textwrap import dedent
 
 from unittest import mock
 from unittest.mock import patch
@@ -37,9 +38,9 @@ from glyphsLib.builder.constants import (
     MASTER_CUSTOM_PARAM_PREFIX,
     UFO_FILENAME_CUSTOM_PARAM,
     GLYPHLIB_PREFIX,
+    UFO_FILENAME_KEY,
+    FULL_FILENAME_KEY,
 )
-from glyphsLib.builder.masters import UFO_FILENAME_KEY
-from glyphsLib.builder.instances import FULL_FILENAME_KEY
 from glyphsLib.classes import GSFont, GSFontMaster, GSCustomParameter, GSGlyph, GSLayer
 from glyphsLib.types import parse_datetime
 
@@ -47,7 +48,6 @@ DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
 class SetCustomParamsTestBase(object):
-
     ufo_module = None  # subclasses must override this
 
     def setUp(self):
@@ -437,6 +437,117 @@ class SetCustomParamsTestBase(object):
         ufo_rt = glyphsLib.to_ufos(font_rt, ufo_module=self.ufo_module)[0]
         self.assertEqual(ufo_rt.lib[UFO2FT_FILTERS_KEY], ufo_filters)
 
+    def test_color_palettes(self):
+        glyphs_palettes = [
+            ["68,0,59,255", "220,187,72,255", "42,255", "87,255", "0,138,255,255"]
+        ]
+        ufo_palettes = [
+            [
+                (0.26666666666666666, 0.0, 0.23137254901960785, 1.0),
+                (0.8627450980392157, 0.7333333333333333, 0.2823529411764706, 1.0),
+                (0.16470588235294117, 0.16470588235294117, 0.16470588235294117, 1.0),
+                (0.3411764705882353, 0.3411764705882353, 0.3411764705882353, 1.0),
+                (0.0, 0.5411764705882353, 1.0, 1.0),
+            ]
+        ]
+        self.font.customParameters["Color Palettes"] = glyphs_palettes
+        self.set_custom_params()
+        self.assertEqual(
+            self.ufo.lib["com.github.googlei18n.ufo2ft.colorPalettes"], ufo_palettes
+        )
+
+        # Test the round-tripping
+        font = glyphsLib.to_glyphs([self.ufo])
+        self.assertEqual(font.customParameters["Color Palettes"], glyphs_palettes)
+
+    def test_meta_table(self):
+        glyphs_meta = [
+            {"data": "de-Latn", "tag": "dlng"},
+            {"data": "en-Latn", "tag": "dlng"},
+            {"data": "sr-Cyrl", "tag": "slng"},
+            {"data": "\x00\x00...", "tag": "appl"},
+        ]
+        self.font.customParameters["meta Table"] = glyphs_meta
+        ufo_meta = {
+            "dlng": ["de-Latn", "en-Latn"],
+            "slng": ["sr-Cyrl"],
+            "appl": "\x00\x00...",
+        }
+        self.set_custom_params()
+        self.assertEqual(self.ufo.lib["public.openTypeMeta"], ufo_meta)
+
+        font = glyphsLib.to_glyphs([self.ufo])
+        self.assertEqual(font.customParameters["meta Table"], glyphs_meta)
+
+    def test_name_table_entry(self):
+        self.font.customParameters.append(
+            GSCustomParameter("Name Table Entry", "1024; FOO; BAZ")
+        )
+        self.font.customParameters.append(
+            GSCustomParameter("Name Table Entry", "2048 1; FOO")
+        )
+        self.font.customParameters.append(
+            GSCustomParameter("Name Table Entry", "4096 1 2; FOO")
+        )
+        self.font.customParameters.append(
+            GSCustomParameter("Name Table Entry", "8192 1 2 3; FOO")
+        )
+        self.font.customParameters.append(
+            GSCustomParameter("Name Table Entry", "0x4000 074; BAZ")
+        )
+
+        self.set_custom_params()
+
+        ufo_records = [
+            {
+                "nameID": 1024,
+                "platformID": 3,
+                "encodingID": 1,
+                "languageID": 0x409,
+                "string": "FOO; BAZ",
+            },
+            {
+                "nameID": 2048,
+                "platformID": 1,
+                "encodingID": 0,
+                "languageID": 0,
+                "string": "FOO",
+            },
+            {
+                "nameID": 4096,
+                "platformID": 1,
+                "encodingID": 2,
+                "languageID": 0,
+                "string": "FOO",
+            },
+            {
+                "nameID": 8192,
+                "platformID": 1,
+                "encodingID": 2,
+                "languageID": 3,
+                "string": "FOO",
+            },
+            {
+                "nameID": 16384,
+                "platformID": 60,
+                "encodingID": 1,
+                "languageID": 0x409,
+                "string": "BAZ",
+            },
+        ]
+
+        self.assertEqual(
+            [dict(r) for r in self.ufo.info.openTypeNameRecords], ufo_records
+        )
+
+        font = glyphsLib.to_glyphs([self.ufo])
+
+        self.assertEqual(font.customParameters[0].value, "1024 3 1 1033; FOO; BAZ")
+        self.assertEqual(font.customParameters[1].value, "2048 1 0 0; FOO")
+        self.assertEqual(font.customParameters[2].value, "4096 1 2 0; FOO")
+        self.assertEqual(font.customParameters[3].value, "8192 1 2 3; FOO")
+        self.assertEqual(font.customParameters[4].value, "16384 60 1 1033; BAZ")
+
 
 class SetCustomParamsTestUfoLib2(SetCustomParamsTestBase, unittest.TestCase):
     ufo_module = ufoLib2
@@ -446,7 +557,7 @@ class SetCustomParamsTestDefcon(SetCustomParamsTestBase, unittest.TestCase):
     ufo_module = defcon
 
 
-def test_ufo_filename_custom_param(ufo_module):
+def test_ufo_filename(ufo_module):
     """Test that new-style UFO_FILENAME_CUSTOM_PARAM is written instead of
     (UFO_FILENAME_KEY|FULL_FILENAME_KEY)."""
     font = glyphsLib.GSFont(os.path.join(DATA, "UFOFilenameTest.glyphs"))
@@ -476,7 +587,7 @@ def test_ufo_filename_custom_param(ufo_module):
     assert ds_rt.instances[0].filename == "../build/instance_ufos/MyFont.ufo"
 
 
-def test_ufo_filename_custom_param_plus_legacy(ufo_module):
+def test_ufo_filename_with_legacy(ufo_module):
     """Test that new-style UFO_FILENAME_CUSTOM_PARAM overrides legacy
     (UFO_FILENAME_KEY|FULL_FILENAME_KEY)."""
     font = glyphsLib.GSFont(os.path.join(DATA, "UFOFilenameTest.glyphs"))
@@ -490,7 +601,7 @@ def test_ufo_filename_custom_param_plus_legacy(ufo_module):
     assert ds.instances[0].filename == "bbb.ufo"
 
 
-def test_ufo_filename_custom_param_instance_empty(ufo_module):
+def test_ufo_filename_with_instance_empty(ufo_module):
     font = glyphsLib.GSFont(os.path.join(DATA, "UFOFilenameTest.glyphs"))
     font.masters[0].customParameters[UFO_FILENAME_CUSTOM_PARAM] = "aaa.ufo"
     del font.instances[0].customParameters[UFO_FILENAME_CUSTOM_PARAM]
@@ -502,3 +613,124 @@ def test_ufo_filename_custom_param_instance_empty(ufo_module):
     assert ds.sources[0].filename == "aaa.ufo"
     # Instance filename should be whatever the default is.
     assert ds.instances[0].filename == "instance_ufos/NewFont-Regular.ufo"
+
+
+def test_ufo_opentype_name_preferred_family_subfamily_name():
+    from glyphsLib.interpolation import apply_instance_data_to_ufo
+
+    filenames = [
+        "UFOInstanceParametersTestV2.glyphs",
+        # NOTE: In the format of version 3, the preferred family and subfamily
+        # names are not actually saved in custom paramters but properties.
+        "UFOInstanceParametersTestV3.glyphs",
+    ]
+
+    for filename in filenames:
+        file = glyphsLib.GSFont(os.path.join(DATA, filename))
+        space = glyphsLib.to_designspace(file, minimal=True)
+
+        assert len(space.sources) == 2, filename
+        assert len(space.instances) == 3, filename
+        for instance, name in zip(space.instances, ["Thin", "Regular", "Black"]):
+            source = copy.deepcopy(space.sources[0])
+            apply_instance_data_to_ufo(source.font, instance, space)
+
+            actual = source.font.info.openTypeNamePreferredFamilyName
+            assert actual == "Typographic New Font", filename
+
+            actual = source.font.info.openTypeNamePreferredSubfamilyName
+            assert actual == f"Typographic {name}", filename
+
+
+def test_ufo_opentype_name_records():
+    from glyphsLib.interpolation import apply_instance_data_to_ufo
+
+    filenames = [
+        "UFOInstanceParametersTestV2.glyphs",
+        "UFOInstanceParametersTestV3.glyphs",
+    ]
+
+    for filename in filenames:
+        file = glyphsLib.GSFont(os.path.join(DATA, filename))
+        space = glyphsLib.to_designspace(file, minimal=True)
+
+        assert len(space.sources) == 2, filename
+        for source in space.sources:
+            actual = list(map(dict, source.font.info.openTypeNameRecords))
+            expected = [
+                {
+                    "nameID": 42,
+                    "platformID": 0,
+                    "encodingID": 4,
+                    "languageID": 0,
+                    "string": "File",
+                },
+            ]
+            assert actual == expected, filename
+
+        assert len(space.instances) == 3, filename
+        for instance, name in zip(space.instances, ["Thin", "Regular", "Black"]):
+            source = copy.deepcopy(space.sources[0])
+            apply_instance_data_to_ufo(source.font, instance, space)
+
+            actual = list(map(dict, source.font.info.openTypeNameRecords))
+            expected = [
+                {
+                    "nameID": 42,
+                    "platformID": 0,
+                    "encodingID": 4,
+                    "languageID": 0,
+                    "string": "File",
+                },
+                {
+                    "nameID": 43,
+                    "platformID": 0,
+                    "encodingID": 4,
+                    "languageID": 0,
+                    "string": f"{name} Instance",
+                },
+            ]
+            assert actual == expected, filename
+
+
+def test_ufo_opentype_os2_selection():
+    from glyphsLib.interpolation import apply_instance_data_to_ufo
+
+    filenames = [
+        "UFOInstanceParametersTestV2.glyphs",
+        "UFOInstanceParametersTestV3.glyphs",
+    ]
+
+    for filename in filenames:
+        file = glyphsLib.GSFont(os.path.join(DATA, filename))
+        space = glyphsLib.to_designspace(file, minimal=True)
+
+        assert len(space.sources) == 2, filename
+        assert len(space.instances) == 3, filename
+        for instance in space.instances:
+            source = copy.deepcopy(space.sources[0])
+            apply_instance_data_to_ufo(source.font, instance, space)
+
+            actual = source.font.info.openTypeOS2Selection
+            assert actual == [7, 8], filename
+
+
+def test_mutiple_params(ufo_module):
+    """Test multiple custom parameters with the same name on GSFont."""
+
+    font = GSFont(os.path.join(DATA, "CustomPrametersTest.glyphs"))
+    assert len(font.customParameters) == 3
+
+    assert all("Virtual Master" == c.name for c in font.customParameters)
+
+    assert font.customParameters[0].value == [{"Axis": "Spacing", "Location": 0}]
+    assert font.customParameters[1].value == [{"Axis": "Spacing", "Location": -100}]
+    assert font.customParameters[2].value == [{"Axis": "Spacing", "Location": 100}]
+
+    instance = font.instances[0]
+    assert len(instance.customParameters) == 2
+
+    assert all("Replace Feature" == c.name for c in instance.customParameters)
+
+    assert instance.customParameters[0].value == "ccmp;sub space by space;"
+    assert instance.customParameters[1].value == "liga;sub space space by space;"

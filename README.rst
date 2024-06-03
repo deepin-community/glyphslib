@@ -3,7 +3,7 @@
 glyphsLib
 =========
 
-This Python 3.6+ library provides a bridge from Glyphs source files (.glyphs) to
+This Python library provides a bridge from Glyphs source files (.glyphs) to
 UFOs and Designspace files via `defcon <https://github.com/typesupply/defcon/>`__ and `designspaceLib <https://github.com/fonttools/fonttools>`__.
 
 The main methods for conversion are found in ``__init__.py``.
@@ -172,7 +172,7 @@ the Python Package Index automatically, if all the tests pass successfully.
    :target: https://github.com/googlefonts/glyphsLib/actions
 .. |PyPI Version| image:: https://img.shields.io/pypi/v/glyphsLib.svg
    :target: https://pypi.org/project/glyphsLib/
-.. |Codecov| image:: https://codecov.io/gh/googlefonts/glyphsLib/branch/master/graph/badge.svg
+.. |Codecov| image:: https://codecov.io/gh/googlefonts/glyphsLib/branch/main/graph/badge.svg
    :target: https://codecov.io/gh/googlefonts/glyphsLib
 .. |Gitter Chat| image:: https://badges.gitter.im/fonttools-dev/glyphsLib.svg
    :alt: Join the chat at https://gitter.im/fonttools-dev/glyphsLib
